@@ -70,6 +70,7 @@ class DownloadManager:
             "total_bytes": job.total_bytes,
             "filename": job.filename,
             "error": job.error,
+            "queue_position": job.queue_position,
         }
         to_remove = set()
         for ws in listeners:
@@ -81,14 +82,31 @@ class DownloadManager:
             listeners.discard(ws)
 
     def create_job(self, url: str, format_id: str = "best") -> DownloadJob:
+        # Enforce maximum active + queued jobs limit to prevent memory/queue overflow
+        active_count = sum(
+            1 for j in self.jobs.values()
+            if j.status in (JobStatus.QUEUED, JobStatus.EXTRACTING, JobStatus.DOWNLOADING, JobStatus.PROCESSING)
+        )
+        if active_count >= 25:
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "QUEUE_FULL", "message": "Server download queue is currently full. Please try again in a few minutes."}
+            )
+
         platform = detect_platform(url)
         job_id = str(uuid.uuid4())
+
+        queued_jobs = [j for j in self.jobs.values() if j.status == JobStatus.QUEUED]
+        q_pos = len(queued_jobs) + 1 if active_count >= settings.MAX_CONCURRENT_DOWNLOADS else None
+
         job = DownloadJob(
             id=job_id,
             url=url,
             platform=platform,
             status=JobStatus.QUEUED,
             progress=0.0,
+            queue_position=q_pos,
             created_at=time.time(),
         )
         self.jobs[job_id] = job
@@ -102,6 +120,7 @@ class DownloadManager:
         async with self.semaphore:
             if job.status == JobStatus.CANCELLED:
                 return
+            job.queue_position = None
             await self._run_download_task(job, format_id, custom_title)
 
     async def _run_download_task(self, job: DownloadJob, format_id: str, custom_title: Optional[str] = None):
@@ -216,7 +235,11 @@ class DownloadManager:
                             filename = base + ".mp4"
                     return info, filename
 
-            info, final_filepath = await asyncio.to_thread(_execute_ydl)
+            # Execute with a 10-minute maximum hard timeout per download job
+            info, final_filepath = await asyncio.wait_for(
+                asyncio.to_thread(_execute_ydl),
+                timeout=600
+            )
 
             if job.status == JobStatus.CANCELLED:
                 raise Exception("DOWNLOAD_CANCELLED")
@@ -243,10 +266,16 @@ class DownloadManager:
             await self.broadcast_job_update(job)
 
         except Exception as e:
+            # Clean up any partial files immediately on failure or cancellation
+            self._cleanup_job_files(job.id, output_dir)
             if "DOWNLOAD_CANCELLED" in str(e) or job.status == JobStatus.CANCELLED:
                 job.status = JobStatus.CANCELLED
                 job.error = "Download stopped by user."
                 logger.info(f"Job {job.id} stopped cleanly by user.")
+            elif isinstance(e, asyncio.TimeoutError):
+                logger.error(f"Download timed out for job {job.id}")
+                job.status = JobStatus.FAILED
+                job.error = "Download request timed out (exceeded 10 minutes limit)."
             else:
                 logger.error(f"Download failed for job {job.id}: {e}")
                 job.status = JobStatus.FAILED

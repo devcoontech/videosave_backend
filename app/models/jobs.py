@@ -33,6 +33,7 @@ class DownloadJob(BaseModel):
     filename: Optional[str] = None
     filepath: Optional[str] = None
     error: Optional[str] = None
+    queue_position: Optional[int] = None
     created_at: float
     completed_at: Optional[float] = None
 
