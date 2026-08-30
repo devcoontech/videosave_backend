@@ -1,0 +1,9 @@
+Gyan.FFmpeg_*
+downloads/
+temp/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.env
