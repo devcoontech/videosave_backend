@@ -21,11 +21,24 @@ os.makedirs(DOWNLOADS_PATH, exist_ok=True)
 os.makedirs(TEMP_PATH, exist_ok=True)
 
 
+import shutil
+
 class DownloadManager:
     def __init__(self):
         self.jobs: Dict[str, DownloadJob] = {}
         self.websocket_listeners: Dict[str, Set[WebSocket]] = {}
         self.semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_DOWNLOADS)
+
+    def _prune_stale_jobs(self):
+        """Remove completed/failed/cancelled jobs older than 2 hours to prevent memory leak."""
+        now = time.time()
+        stale_ids = [
+            j_id for j_id, j in self.jobs.items()
+            if j.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
+            and (now - j.created_at > 7200)
+        ]
+        for j_id in stale_ids:
+            self.jobs.pop(j_id, None)
 
     def get_job(self, job_id: str) -> Optional[DownloadJob]:
         return self.jobs.get(job_id)
@@ -82,12 +95,28 @@ class DownloadManager:
             listeners.discard(ws)
 
     def create_job(self, url: str, format_id: str = "best") -> DownloadJob:
-        # Enforce maximum active + queued jobs limit to prevent memory/queue overflow
+        self._prune_stale_jobs()
+        # Enforce free disk space threshold before creating job
+        try:
+            free_bytes = shutil.disk_usage(str(DOWNLOADS_PATH)).free
+            min_bytes = int(settings.MIN_FREE_DISK_GB * 1024 * 1024 * 1024)
+            if free_bytes < min_bytes:
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=507,
+                    detail={"code": "INSUFFICIENT_STORAGE", "message": "Server disk space is low. Please try again later."}
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+        # Enforce maximum active + queued jobs limit
         active_count = sum(
             1 for j in self.jobs.values()
             if j.status in (JobStatus.QUEUED, JobStatus.EXTRACTING, JobStatus.DOWNLOADING, JobStatus.PROCESSING)
         )
-        if active_count >= 25:
+        if active_count >= settings.MAX_QUEUED_JOBS:
             from fastapi import HTTPException
             raise HTTPException(
                 status_code=429,
@@ -235,10 +264,10 @@ class DownloadManager:
                             filename = base + ".mp4"
                     return info, filename
 
-            # Execute with a 10-minute maximum hard timeout per download job
+            # Execute with configurable hard timeout per download job
             info, final_filepath = await asyncio.wait_for(
                 asyncio.to_thread(_execute_ydl),
-                timeout=600
+                timeout=settings.DOWNLOAD_TIMEOUT_SECONDS
             )
 
             if job.status == JobStatus.CANCELLED:

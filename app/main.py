@@ -62,12 +62,22 @@ app = FastAPI(
 # Lightweight Production IP Rate Limiting Middleware (30 req / min per IP)
 CLIENT_REQUEST_LOGS: Dict[str, List[float]] = {}
 
+def get_client_ip(request: Request) -> str:
+    """Extract real client IP behind trusted reverse proxies (Coolify / Nginx)."""
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else "unknown"
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     # Only rate-limit API action endpoints
     path = request.url.path
     if path.startswith("/api/") and not path.startswith("/api/health"):
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_client_ip(request)
         now = time.time()
         
         # Clean request timestamps older than 60s
@@ -81,25 +91,45 @@ async def rate_limit_middleware(request: Request, call_next):
         timestamps.append(now)
         CLIENT_REQUEST_LOGS[client_ip] = timestamps
 
+        # Periodic memory cleanup of stale IP logs
+        if len(CLIENT_REQUEST_LOGS) > 1000:
+            stale_ips = [ip for ip, ts in CLIENT_REQUEST_LOGS.items() if not ts or (now - ts[-1] > 3600)]
+            for ip in stale_ips:
+                CLIENT_REQUEST_LOGS.pop(ip, None)
+
     response = await call_next(request)
     return response
 
-# Strict CORS configuration
-allowed_origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-]
+# Dynamic CORS configuration
+allowed_origins: List[str] = []
+
+# Populate configured CORS origins
+if settings.CORS_ORIGINS:
+    for origin in settings.CORS_ORIGINS.split(","):
+        o = origin.strip().rstrip("/")
+        if o and o not in allowed_origins:
+            allowed_origins.append(o)
 
 if settings.FRONTEND_URL:
     clean_frontend_url = settings.FRONTEND_URL.rstrip("/")
     if clean_frontend_url not in allowed_origins:
         allowed_origins.append(clean_frontend_url)
-    if not clean_frontend_url.startswith("http"):
+    if not clean_frontend_url.startswith("http://") and not clean_frontend_url.startswith("https://"):
         allowed_origins.append(f"https://{clean_frontend_url}")
+
+# Default development fallbacks if no origins specified
+if not allowed_origins or settings.ENVIRONMENT.lower() == "development":
+    dev_defaults = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
+    for d in dev_defaults:
+        if d not in allowed_origins:
+            allowed_origins.append(d)
 
 app.add_middleware(
     CORSMiddleware,

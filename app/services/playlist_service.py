@@ -4,6 +4,7 @@ import time
 from typing import List, Dict, Any, Optional
 import yt_dlp
 from fastapi import HTTPException, status
+from backend.app.core.config import settings
 from backend.app.core.logging import logger
 from backend.app.models.playlist import PlaylistItem, PlaylistInfoResponse
 from backend.app.models.jobs import JobStatus
@@ -47,6 +48,9 @@ class PlaylistService:
         uploader = info.get("uploader") or info.get("channel") or "Unknown Channel"
 
         entries = info.get("entries", [])
+        if settings.MAX_PLAYLIST_ITEMS > 0 and len(entries) > settings.MAX_PLAYLIST_ITEMS:
+            entries = entries[:settings.MAX_PLAYLIST_ITEMS]
+
         videos: List[PlaylistItem] = []
 
         index = 1
@@ -84,6 +88,15 @@ class PlaylistService:
     async def create_playlist_job(
         self, video_urls: List[str], format_id: str = "best", existing_job_id: Optional[str] = None
     ) -> str:
+        if settings.MAX_PLAYLIST_ITEMS > 0 and len(video_urls) > settings.MAX_PLAYLIST_ITEMS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "PLAYLIST_LIMIT_EXCEEDED",
+                    "message": f"Playlist size exceeds maximum limit of {settings.MAX_PLAYLIST_ITEMS} videos.",
+                },
+            )
+
         # Resume existing playlist job if available
         if existing_job_id and existing_job_id in self.playlist_jobs:
             pj = self.playlist_jobs[existing_job_id]

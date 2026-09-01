@@ -34,12 +34,23 @@ class CleanupWorker:
         now = time.time()
         cleaned_count = 0
 
+        # Gather active file paths from download manager to protect them
+        from backend.app.services.download_service import download_manager
+        active_filepaths = set()
+        for job in download_manager.jobs.values():
+            if job.status.value in ("queued", "extracting", "downloading", "processing") and job.filepath:
+                active_filepaths.add(os.path.realpath(job.filepath))
+
         for target_dir in [DOWNLOADS_PATH, TEMP_PATH]:
             if not target_dir.exists():
                 continue
             for item in target_dir.iterdir():
                 if item.is_file():
                     try:
+                        resolved_item = os.path.realpath(str(item))
+                        if resolved_item in active_filepaths:
+                            continue
+
                         file_age = now - item.stat().st_mtime
                         if file_age > self.retention_seconds:
                             item.unlink()

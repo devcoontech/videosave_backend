@@ -60,3 +60,15 @@ def test_invalid_url_media_info():
     assert res.status_code == 400
     data = res.json()
     assert "UNSUPPORTED_PLATFORM" in str(data)
+
+
+def test_proxy_rate_limit_headers():
+    headers = {"X-Forwarded-For": "203.0.113.195, 172.18.0.1"}
+    res = client.get("/api/health", headers=headers)
+    assert res.status_code == 200
+
+
+def test_file_download_invalid_job():
+    res = client.get("/api/download/nonexistent-job-id/file")
+    assert res.status_code == 404
+

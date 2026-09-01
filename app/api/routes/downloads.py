@@ -6,6 +6,8 @@ from backend.app.models.jobs import DownloadRequest, DownloadJobResponse, Downlo
 from backend.app.services.download_service import download_manager
 from backend.app.core.security import validate_and_normalize_url
 
+from backend.app.core.config import DOWNLOADS_PATH
+
 router = APIRouter(prefix="/download", tags=["Downloads"])
 
 
@@ -59,6 +61,15 @@ async def download_job_file(job_id: str):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "FILE_NOT_READY", "message": "File is not ready or has not finished downloading."},
+        )
+
+    # Path traversal protection check
+    real_filepath = os.path.realpath(job.filepath)
+    real_downloads_dir = os.path.realpath(str(DOWNLOADS_PATH))
+    if not real_filepath.startswith(real_downloads_dir):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "ACCESS_DENIED", "message": "Access to requested file path is forbidden."},
         )
 
     filename = job.filename or os.path.basename(job.filepath)

@@ -14,6 +14,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Create persistent download and temporary directories
+RUN mkdir -p /app/downloads /app/temp
+
+# Establish package resolution symlink so import backend.app resolves cleanly
+RUN mkdir -p /app/backend && ln -s /app/app /app/backend/app
+
+ENV PYTHONPATH=/app
 EXPOSE 8000
 
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
