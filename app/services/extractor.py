@@ -40,6 +40,14 @@ def get_platform_headers(url: str) -> dict:
         }
 
 
+class ExtractorFailure(Exception):
+    def __init__(self, status_code: int, code: str, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+
 class MediaExtractor:
     def __init__(self):
         self.base_options = {
@@ -106,51 +114,63 @@ class MediaExtractor:
 
             err_msg = str(de).lower()
             if "private video" in err_msg or "login" in err_msg:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"code": "PRIVATE_VIDEO", "message": "This video is private or requires login to view."},
+                raise ExtractorFailure(
+                    status.HTTP_403_FORBIDDEN,
+                    "PRIVATE_VIDEO",
+                    "This video is private or requires login to view.",
                 )
             elif "not available" in err_msg or "removed" in err_msg or "deleted" in err_msg:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={"code": "VIDEO_UNAVAILABLE", "message": "This video is unavailable or has been removed."},
+                raise ExtractorFailure(
+                    status.HTTP_404_NOT_FOUND,
+                    "VIDEO_UNAVAILABLE",
+                    "This video is unavailable or has been removed.",
                 )
             elif "geo" in err_msg or "region" in err_msg:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"code": "GEO_RESTRICTED", "message": "This content is geo-restricted in your area."},
+                raise ExtractorFailure(
+                    status.HTTP_403_FORBIDDEN,
+                    "GEO_RESTRICTED",
+                    "This content is geo-restricted in your area.",
                 )
             elif "bot" in err_msg or "sign in to confirm" in err_msg:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"code": "BOT_VERIFICATION_REQUIRED", "message": "YouTube bot verification triggered. Please try again or check the URL."},
+                raise ExtractorFailure(
+                    status.HTTP_403_FORBIDDEN,
+                    "BOT_VERIFICATION_REQUIRED",
+                    "YouTube bot verification triggered. Please try again or check the URL.",
                 )
             elif "age" in err_msg:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"code": "LOGIN_REQUIRED", "message": "Age-restricted video requiring authentication."},
+                raise ExtractorFailure(
+                    status.HTTP_403_FORBIDDEN,
+                    "LOGIN_REQUIRED",
+                    "Age-restricted video requiring authentication.",
                 )
             else:
                 logger.error(f"yt-dlp extraction error for {url}: {de}")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"code": "EXTRACTION_FAILED", "message": "Could not extract media info from the provided URL."},
+                raise ExtractorFailure(
+                    status.HTTP_400_BAD_REQUEST,
+                    "EXTRACTION_FAILED",
+                    "Could not extract media info from the provided URL.",
                 )
-        except HTTPException:
+        except ExtractorFailure:
             raise
         except Exception as e:
             logger.error(f"Unexpected error extracting media info for {url}: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"code": "UNKNOWN_ERROR", "message": f"Extraction failed: {str(e)}"},
+            raise ExtractorFailure(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "UNKNOWN_ERROR",
+                f"Extraction failed: {str(e)}",
             )
 
     async def get_media_info(self, url: str) -> MediaInfoResponse:
         normalized_url = validate_and_normalize_url(url)
         platform = detect_platform(normalized_url)
 
-        # Execute blocking extraction in thread pool
-        info = await asyncio.to_thread(self._sync_extract_info, normalized_url)
+        try:
+            info = await asyncio.to_thread(self._sync_extract_info, normalized_url)
+        except ExtractorFailure as e:
+            raise HTTPException(
+                status_code=e.status_code,
+                detail={"code": e.code, "message": e.message},
+            )
 
         # Check if URL returned a playlist object instead of a single video
         if info.get("_type") == "playlist" or (info.get("entries") is not None and not info.get("formats")):

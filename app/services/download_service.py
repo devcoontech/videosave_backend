@@ -216,10 +216,14 @@ class DownloadManager:
 
         from backend.app.services.extractor import get_platform_headers
 
+        quality_slug = sanitize_filename(
+            format_id if format_id and format_id != "best" else "best"
+        )
+
         ydl_opts = {
             "format": fmt_str,
             "format_sort": fmt_sort,
-            "outtmpl": os.path.join(output_dir, f"%(title)s [{job.id[:8]}].%(ext)s"),
+            "outtmpl": os.path.join(output_dir, f"%(title)s - {quality_slug} [{job.id[:8]}].%(ext)s"),
             "merge_output_format": "mp4",
             "progress_hooks": [progress_hook],
             "quiet": True,
@@ -286,10 +290,15 @@ class DownloadManager:
             title_clean = sanitize_filename(info.get("title", "Downloaded Video"))
             ext_clean = final_filepath.split(".")[-1] if "." in final_filepath else "mp4"
             height = info.get("height")
-            quality_tag = f" ({height}p)" if height else (f" ({format_id})" if format_id and format_id != "best" else "")
+            if format_id and format_id != "best":
+                quality_label = format_id if str(format_id).lower().endswith("p") else f"{format_id}p"
+            elif height:
+                quality_label = f"{int(height)}p"
+            else:
+                quality_label = "best"
             job.title = info.get("title", "Downloaded Video")
             job.filepath = final_filepath
-            job.filename = f"{title_clean}{quality_tag}.{ext_clean}"
+            job.filename = f"{title_clean} - {quality_label}.{ext_clean}"
             job.completed_at = time.time()
             logger.info(f"Job {job.id} completed successfully: {job.filename}")
             await self.broadcast_job_update(job)

@@ -27,8 +27,8 @@ from backend.app.services.download_service import download_manager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.APP_NAME} FastAPI backend...")
 
-    # Verify FFmpeg status on startup
-    if ffmpeg_service.is_available():
+    # Resolve FFmpeg without blocking startup on a slow -version probe
+    if ffmpeg_service.get_ffmpeg_location():
         logger.info("FFmpeg integration initialized and ready.")
     else:
         logger.warning(

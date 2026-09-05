@@ -48,6 +48,7 @@ class FFmpegService:
                 stderr=subprocess.PIPE,
                 text=True,
                 check=False,
+                timeout=8,
             )
             return res.returncode == 0
         except Exception as e:

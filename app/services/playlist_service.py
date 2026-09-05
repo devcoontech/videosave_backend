@@ -32,17 +32,20 @@ class PlaylistService:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 if not info:
-                    raise Exception("Unable to extract playlist information.")
+                    raise RuntimeError("Unable to extract playlist information.")
                 return info
         except Exception as e:
             logger.error(f"Playlist extraction error: {e}")
+            raise RuntimeError(str(e)) from e
+
+    async def get_playlist_info(self, url: str) -> PlaylistInfoResponse:
+        try:
+            info = await asyncio.to_thread(self._sync_extract_playlist, url)
+        except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "PLAYLIST_EXTRACTION_FAILED", "message": f"Failed to extract playlist: {str(e)}"},
             )
-
-    async def get_playlist_info(self, url: str) -> PlaylistInfoResponse:
-        info = await asyncio.to_thread(self._sync_extract_playlist, url)
         playlist_id = info.get("id", "playlist")
         title = info.get("title", "YouTube Playlist")
         uploader = info.get("uploader") or info.get("channel") or "Unknown Channel"
