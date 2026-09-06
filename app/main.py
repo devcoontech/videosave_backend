@@ -181,10 +181,25 @@ async def websocket_download_progress_root(websocket: WebSocket, job_id: str):
 @app.get("/api/health", tags=["Health"])
 async def health_check():
     """Health check endpoint returning system status and FFmpeg availability."""
+    import urllib.request
+    import urllib.error
     import yt_dlp
 
     cookies_path = cookies_file()
     cookie_info = cookies_diagnostics()
+
+    bgutil_url = settings.BGUTIL_POT_BASE_URL or ""
+    bgutil_reachable = False
+    if bgutil_url:
+        ping_url = bgutil_url.rstrip("/") + "/ping"
+        try:
+            with urllib.request.urlopen(ping_url, timeout=2) as resp:
+                bgutil_reachable = resp.status == 200
+        except (urllib.error.URLError, TimeoutError, OSError):
+            bgutil_reachable = False
+
+    youtube_ready = bgutil_reachable or not bgutil_url
+
     return {
         "status": "healthy",
         "app_name": settings.APP_NAME,
@@ -194,6 +209,11 @@ async def health_check():
         "cookies_path": cookies_path,
         "cookies_youtube_entries": cookie_info["youtube_entries"],
         "cookies_has_login": cookie_info["has_login_info"] or cookie_info["has_sid"],
+        "cookies_instagram_entries": cookie_info["instagram_entries"],
+        "cookies_facebook_entries": cookie_info["facebook_entries"],
+        "cookies_tiktok_entries": cookie_info["tiktok_entries"],
         "impersonate_available": has_impersonate(),
-        "bgutil_pot_url": settings.BGUTIL_POT_BASE_URL or None,
+        "bgutil_pot_url": bgutil_url or None,
+        "bgutil_reachable": bgutil_reachable,
+        "youtube_ready": youtube_ready,
     }

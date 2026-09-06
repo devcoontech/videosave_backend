@@ -14,20 +14,34 @@ CHROME_UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-YOUTUBE_PLAYER_CLIENTS = ["android_vr", "tv", "web_safari", "android", "mweb"]
-# (player_clients, use_account_cookies) — try no-cookie clients first on VPS/datacenter IPs.
-YOUTUBE_TRY_PLANS: List[Tuple[List[str], bool]] = [
-    (["android_vr"], False),
-    (["tv", "web_safari"], False),
-    (["web_safari"], False),
-    (["tv_embedded"], False),
-    (["android"], False),
-    (["mweb"], False),
-    (["android", "ios"], False),
-    (["web"], True),
-    (["web", "web_safari"], True),
-    (["tv"], True),
-]
+def has_logged_in_cookies() -> bool:
+    diag = cookies_diagnostics()
+    return bool(diag["configured"] and (diag["has_login_info"] or diag["has_sid"]))
+
+
+def build_youtube_try_plans() -> List[Tuple[List[str], bool]]:
+    """When logged-in cookies exist, use them first (age-restricted/private videos)."""
+    cookie_plans: List[Tuple[List[str], bool]] = [
+        (["web"], True),
+        (["web", "web_safari"], True),
+        (["tv"], True),
+        (["web_creator"], True),
+    ]
+    anonymous_plans: List[Tuple[List[str], bool]] = [
+        (["android_vr"], False),
+        (["tv", "web_safari"], False),
+        (["web_safari"], False),
+        (["tv_embedded"], False),
+        (["android"], False),
+        (["mweb"], False),
+        (["android", "ios"], False),
+    ]
+    if has_logged_in_cookies():
+        return cookie_plans + anonymous_plans
+    if cookies_file():
+        return anonymous_plans + cookie_plans
+    return anonymous_plans
+
 
 PROGRESSIVE_PLATFORMS = frozenset({"facebook", "instagram", "tiktok"})
 
@@ -91,8 +105,14 @@ def cookies_diagnostics() -> Dict[str, Any]:
             "youtube_entries": 0,
             "has_login_info": False,
             "has_sid": False,
+            "instagram_entries": 0,
+            "facebook_entries": 0,
+            "tiktok_entries": 0,
         }
     youtube_entries = 0
+    instagram_entries = 0
+    facebook_entries = 0
+    tiktok_entries = 0
     has_login_info = False
     has_sid = False
     try:
@@ -104,13 +124,18 @@ def cookies_diagnostics() -> Dict[str, Any]:
                 if len(parts) < 6:
                     continue
                 domain, _flag, _path, _secure, _expires, name = parts[:6]
-                if "youtube.com" not in domain:
-                    continue
-                youtube_entries += 1
-                if name == "LOGIN_INFO":
-                    has_login_info = True
-                if name == "SID":
-                    has_sid = True
+                if "youtube.com" in domain:
+                    youtube_entries += 1
+                    if name == "LOGIN_INFO":
+                        has_login_info = True
+                    if name == "SID":
+                        has_sid = True
+                elif "instagram.com" in domain:
+                    instagram_entries += 1
+                elif "facebook.com" in domain:
+                    facebook_entries += 1
+                elif "tiktok.com" in domain:
+                    tiktok_entries += 1
     except OSError:
         pass
     return {
@@ -119,6 +144,9 @@ def cookies_diagnostics() -> Dict[str, Any]:
         "youtube_entries": youtube_entries,
         "has_login_info": has_login_info,
         "has_sid": has_sid,
+        "instagram_entries": instagram_entries,
+        "facebook_entries": facebook_entries,
+        "tiktok_entries": tiktok_entries,
     }
 
 
@@ -141,16 +169,20 @@ def platform_headers(url: str) -> dict:
 
 def extractor_args_for(url: str, player_clients: Optional[List[str]] = None) -> dict:
     youtube_args: Dict[str, Any] = {
-        "player_client": list(player_clients or YOUTUBE_PLAYER_CLIENTS),
+        "player_client": list(player_clients or ["web", "web_safari", "android_vr", "tv"]),
     }
     if settings.YOUTUBE_PO_TOKEN:
         youtube_args["po_token"] = [settings.YOUTUBE_PO_TOKEN]
 
     args: Dict[str, Any] = {
         "youtube": youtube_args,
+        "instagram": {
+            "api": ["web"],
+        },
         "tiktok": {
             "app_version": ["33.0.0"],
             "manifest_app_version": ["33000"],
+            "api_hostname": ["api22-normal-c-useast1a.tiktokv.com"],
         },
     }
     if settings.BGUTIL_POT_BASE_URL:
@@ -268,6 +300,30 @@ def is_retryable_youtube_error(message: str) -> bool:
             "unable to extract uploader id",
             "unable to extract",
             "playability status",
+            "confirm your age",
+            "age-restricted",
+            "age restricted",
+            "inappropriate for some users",
+            "login required",
+            "members only",
+            "private video",
+        )
+    )
+
+
+def is_age_or_login_error(message: str) -> bool:
+    text = (message or "").lower()
+    return any(
+        token in text
+        for token in (
+            "confirm your age",
+            "age-restricted",
+            "age restricted",
+            "inappropriate for some users",
+            "login required",
+            "members only",
+            "private video",
+            "sign in",
         )
     )
 
@@ -323,12 +379,7 @@ def extract_info_with_fallback(
     last_error: Optional[Exception] = None
 
     if platform == "youtube":
-        has_cookies = bool(cookies_file())
-        plans: List[Tuple[List[str], bool]] = []
-        for clients, wants_cookies in YOUTUBE_TRY_PLANS:
-            if wants_cookies and not has_cookies:
-                continue
-            plans.append((clients, wants_cookies))
+        plans = build_youtube_try_plans()
         for clients, use_account_cookies in plans:
             try:
                 opts = base_ydl_opts(
@@ -346,14 +397,14 @@ def extract_info_with_fallback(
         if last_error:
             raise last_error
 
-    if platform == "facebook":
+    if platform in PROGRESSIVE_PLATFORMS:
         attempts: List[Dict[str, Any]] = []
-        if has_impersonate():
+        # Cookies first for private/age-gated content on social platforms
+        if has_impersonate() and platform == "facebook":
             for target in [*FACEBOOK_IMPERSONATE, ""]:
-                attempts.extend([
-                    {"impersonate": target, "use_cookies": True, "skip_impersonate": False},
-                    {"impersonate": target, "use_cookies": False, "skip_impersonate": False},
-                ])
+                attempts.append({"impersonate": target, "use_cookies": True, "skip_impersonate": False})
+            for target in [*FACEBOOK_IMPERSONATE, ""]:
+                attempts.append({"impersonate": target, "use_cookies": False, "skip_impersonate": False})
             attempts.extend([
                 {"impersonate": None, "use_cookies": True, "skip_impersonate": True},
                 {"impersonate": None, "use_cookies": False, "skip_impersonate": True},
@@ -369,12 +420,14 @@ def extract_info_with_fallback(
                     url,
                     extra,
                     use_cookies=attempt["use_cookies"],
-                    impersonate=attempt["impersonate"],
+                    impersonate=attempt.get("impersonate"),
                     skip_impersonate=attempt["skip_impersonate"],
                 )
                 return _run_ydl(url, opts, download), opts
             except Exception as err:
                 last_error = err
+                if is_age_or_login_error(str(err)) or is_facebook_parse_error(str(err)):
+                    continue
                 continue
         if last_error:
             raise last_error

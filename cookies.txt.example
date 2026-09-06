@@ -1,29 +1,16 @@
-# YouTube on VPS/datacenter IPs (Contabo, AWS, etc.)
+# cookies.txt — one file for ALL platforms (YouTube, Facebook, Instagram, TikTok)
 #
-# IMPORTANT: Cookies exported from your HOME PC often FAIL on the VPS because
-# YouTube ties sessions to IP addresses. The backend now uses android_vr + PO
-# tokens automatically — cookies are optional extra, not required.
+# Export while logged in to EACH platform you need:
+#   1. youtube.com   → export current site
+#   2. facebook.com  → export current site (append or re-export all)
+#   3. instagram.com → export current site
+#   4. tiktok.com    → export current site
 #
-# === If you still want cookies (optional) ===
+# Or use one export from a browser profile logged into all of them.
+# The file MUST contain SID + LOGIN_INFO for YouTube age-restricted videos.
 #
-# 1. Use Firefox (not Chrome) — log in to https://www.youtube.com
-# 2. Extension: "Get cookies.txt LOCALLY"
-# 3. Export → Current site → save as cookies.txt
-# 4. File must contain .youtube.com lines with SID and LOGIN_INFO
+# Coolify: mount at /app/cookies.txt — never commit to Git.
 #
-# === Coolify ===
-#
-# Upload cookies.txt to container path: /app/cookies.txt
-# Do NOT commit cookies.txt to Git.
-#
-# === PO Token (built into Docker image) ===
-#
-# The backend Docker image starts bgutil automatically on port 4416.
-# Env (optional): BGUTIL_POT_BASE_URL=http://127.0.0.1:4416
-#
-# === Verify deployment ===
-#
-# GET /api/health should show:
-#   cookies_configured: true/false
-#   cookies_has_login: true (if using cookies)
-#   bgutil_pot_url: http://127.0.0.1:4416
+# Verify: GET /api/health
+#   cookies_has_login: true
+#   cookies_youtube_entries > 0

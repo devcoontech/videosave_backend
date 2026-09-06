@@ -8,6 +8,7 @@ from backend.app.utils.urls import detect_platform
 from backend.app.models.media import MediaFormat, MediaInfoResponse
 from backend.app.services.ytdlp_common import (
     extract_info_with_fallback,
+    is_age_or_login_error,
     is_bot_challenge,
     is_facebook_parse_error,
     platform_headers,
@@ -86,11 +87,12 @@ class MediaExtractor:
                     "GEO_RESTRICTED",
                     "This content is geo-restricted in your area.",
                 )
-            elif "age" in err_msg:
+            elif is_age_or_login_error(err_text):
                 raise ExtractorFailure(
                     status.HTTP_403_FORBIDDEN,
                     "LOGIN_REQUIRED",
-                    "Age-restricted video requiring authentication.",
+                    "This video requires login or age verification. "
+                    "Ensure cookies.txt includes a logged-in session for this platform and re-upload to /app/cookies.txt.",
                 )
             else:
                 logger.error(f"yt-dlp extraction error for {url}: {first_error}")
