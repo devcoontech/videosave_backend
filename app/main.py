@@ -52,7 +52,25 @@ async def lifespan(app: FastAPI):
     if has_impersonate():
         logger.info("curl-cffi browser impersonation is available (Facebook).")
 
-    # Start background temporary file cleanup worker
+    if cookie_info.get("has_login_info") or cookie_info.get("has_sid"):
+        logger.info("YouTube logged-in cookies detected (age-restricted videos supported).")
+    elif cookies_path:
+        logger.warning("cookies.txt present but missing YouTube SID/LOGIN_INFO.")
+
+    bgutil_url = settings.BGUTIL_POT_BASE_URL or ""
+    if bgutil_url:
+        import urllib.request
+        try:
+            with urllib.request.urlopen(bgutil_url.rstrip("/") + "/ping", timeout=3) as resp:
+                if resp.status == 200:
+                    logger.info(f"bgutil PO token server reachable at {bgutil_url}")
+                else:
+                    logger.warning(f"bgutil PO token server returned HTTP {resp.status}")
+        except Exception as exc:
+            logger.warning(
+                f"bgutil PO token server not reachable at {bgutil_url} ({exc}). "
+                "YouTube will use logged-in cookies or android_vr fallback."
+            )
     cleanup_worker.start()
     yield
 
@@ -198,7 +216,11 @@ async def health_check():
         except (urllib.error.URLError, TimeoutError, OSError):
             bgutil_reachable = False
 
-    youtube_ready = bgutil_reachable or not bgutil_url
+    youtube_ready = (
+        bgutil_reachable
+        or bool(cookie_info["has_login_info"] or cookie_info["has_sid"])
+        or not bgutil_url
+    )
 
     return {
         "status": "healthy",
