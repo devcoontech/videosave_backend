@@ -16,7 +16,7 @@ from backend.app.core.logging import logger
 from backend.app.api.router import api_router
 from backend.app.services.cleanup_service import cleanup_worker
 from backend.app.services.ffmpeg_service import ffmpeg_service
-from backend.app.services.ytdlp_common import cookies_file, has_impersonate
+from backend.app.services.ytdlp_common import cookies_diagnostics, cookies_file, has_impersonate
 
 
 import time
@@ -39,8 +39,11 @@ async def lifespan(app: FastAPI):
         )
 
     cookies_path = cookies_file()
+    cookie_info = cookies_diagnostics()
     if cookies_path:
         logger.info(f"YouTube/Facebook cookies loaded from: {cookies_path}")
+        if cookie_info.get("youtube_entries", 0) == 0:
+            logger.warning("cookies.txt has no .youtube.com entries.")
     else:
         logger.warning(
             "No cookies.txt found. YouTube downloads will likely fail on VPS/datacenter IPs. "
@@ -181,13 +184,16 @@ async def health_check():
     import yt_dlp
 
     cookies_path = cookies_file()
+    cookie_info = cookies_diagnostics()
     return {
         "status": "healthy",
         "app_name": settings.APP_NAME,
         "ffmpeg_available": ffmpeg_service.is_available(),
         "yt_dlp_version": yt_dlp.version.__version__,
-        "cookies_configured": bool(cookies_path),
+        "cookies_configured": cookie_info["configured"],
         "cookies_path": cookies_path,
+        "cookies_youtube_entries": cookie_info["youtube_entries"],
+        "cookies_has_login": cookie_info["has_login_info"] or cookie_info["has_sid"],
         "impersonate_available": has_impersonate(),
         "bgutil_pot_url": settings.BGUTIL_POT_BASE_URL or None,
     }

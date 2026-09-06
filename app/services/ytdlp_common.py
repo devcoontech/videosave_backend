@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yt_dlp
@@ -14,21 +15,18 @@ CHROME_UA = (
 )
 
 YOUTUBE_PLAYER_CLIENTS = ["android_vr", "tv", "web_safari", "android", "mweb"]
-# Ordered by reliability on datacenter/VPS IPs (no PO token required first).
-YOUTUBE_CLIENT_CHAINS: List[List[str]] = [
-    ["android_vr"],
-    ["tv", "web_safari"],
-    ["web_safari"],
-    ["tv_embedded"],
-    ["android"],
-    ["mweb"],
-    ["android", "ios"],
-]
-# Used when cookies.txt is present (logged-in web/tv sessions).
-YOUTUBE_COOKIE_CLIENT_CHAINS: List[List[str]] = [
-    ["web"],
-    ["tv"],
-    ["web", "web_safari"],
+# (player_clients, use_account_cookies) — try no-cookie clients first on VPS/datacenter IPs.
+YOUTUBE_TRY_PLANS: List[Tuple[List[str], bool]] = [
+    (["android_vr"], False),
+    (["tv", "web_safari"], False),
+    (["web_safari"], False),
+    (["tv_embedded"], False),
+    (["android"], False),
+    (["mweb"], False),
+    (["android", "ios"], False),
+    (["web"], True),
+    (["web", "web_safari"], True),
+    (["tv"], True),
 ]
 
 PROGRESSIVE_PLATFORMS = frozenset({"facebook", "instagram", "tiktok"})
@@ -76,11 +74,52 @@ def cookies_file() -> Optional[str]:
     candidates = [
         BASE_DIR / "cookies.txt",
         BASE_DIR.parent / "cookies.txt",
+        Path("/app/cookies.txt"),
     ]
     for path in candidates:
         if path.is_file():
             return str(path)
     return None
+
+
+def cookies_diagnostics() -> Dict[str, Any]:
+    path = cookies_file()
+    if not path:
+        return {
+            "configured": False,
+            "path": None,
+            "youtube_entries": 0,
+            "has_login_info": False,
+            "has_sid": False,
+        }
+    youtube_entries = 0
+    has_login_info = False
+    has_sid = False
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if line.startswith("#") or not line.strip():
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 6:
+                    continue
+                domain, _flag, _path, _secure, _expires, name = parts[:6]
+                if "youtube.com" not in domain:
+                    continue
+                youtube_entries += 1
+                if name == "LOGIN_INFO":
+                    has_login_info = True
+                if name == "SID":
+                    has_sid = True
+    except OSError:
+        pass
+    return {
+        "configured": True,
+        "path": path,
+        "youtube_entries": youtube_entries,
+        "has_login_info": has_login_info,
+        "has_sid": has_sid,
+    }
 
 
 def platform_headers(url: str) -> dict:
@@ -212,21 +251,48 @@ def is_bot_challenge(message: str) -> bool:
             "please sign in",
             "use --cookies-from-browser",
             "bot verification",
+        )
+    )
+
+
+def is_retryable_youtube_error(message: str) -> bool:
+    text = (message or "").lower()
+    if is_bot_challenge(text):
+        return True
+    return any(
+        token in text
+        for token in (
             "the page needs to be reloaded",
+            "http error 403",
+            "requested format is not available",
+            "unable to extract uploader id",
+            "unable to extract",
+            "playability status",
         )
     )
 
 
 def youtube_bot_user_message() -> str:
-    has_cookies = bool(cookies_file())
-    if has_cookies:
+    diag = cookies_diagnostics()
+    if not diag["configured"]:
         return (
-            "YouTube blocked this request. Your cookies.txt may be expired or invalid. "
-            "Re-export cookies from Firefox while logged into YouTube, replace /app/cookies.txt, and redeploy."
+            "YouTube blocked this server's IP. Export YouTube cookies from Firefox "
+            "(extension: Get cookies.txt LOCALLY), mount the file at /app/cookies.txt in Coolify, and redeploy."
+        )
+    if diag["youtube_entries"] == 0:
+        return (
+            "cookies.txt was found but contains no .youtube.com entries. "
+            "Re-export from Firefox while on youtube.com and re-upload to /app/cookies.txt."
+        )
+    if not diag["has_login_info"] and not diag["has_sid"]:
+        return (
+            "cookies.txt is missing a logged-in YouTube session (no SID/LOGIN_INFO). "
+            "Log into YouTube in Firefox, export cookies for the current site, and re-upload."
         )
     return (
-        "YouTube blocked this server's IP. Export YouTube cookies from Firefox "
-        "(extension: Get cookies.txt LOCALLY), mount the file at /app/cookies.txt in Coolify, and redeploy the backend."
+        "YouTube blocked this request from the server IP. Home-exported cookies often fail on VPS "
+        "because the IP differs. Redeploy with the latest backend (uses android_vr without cookies), "
+        "or add the bgutil PO-token sidecar — see cookies.txt.example."
     )
 
 
@@ -257,22 +323,24 @@ def extract_info_with_fallback(
     last_error: Optional[Exception] = None
 
     if platform == "youtube":
-        chains: List[List[str]] = []
-        if cookies_file():
-            chains.extend(YOUTUBE_COOKIE_CLIENT_CHAINS)
-        chains.extend(YOUTUBE_CLIENT_CHAINS)
-        for clients in chains:
+        has_cookies = bool(cookies_file())
+        plans: List[Tuple[List[str], bool]] = []
+        for clients, wants_cookies in YOUTUBE_TRY_PLANS:
+            if wants_cookies and not has_cookies:
+                continue
+            plans.append((clients, wants_cookies))
+        for clients, use_account_cookies in plans:
             try:
                 opts = base_ydl_opts(
                     url,
                     extra,
                     player_clients=clients,
-                    use_cookies=bool(cookies_file()),
+                    use_cookies=use_account_cookies,
                 )
                 return _run_ydl(url, opts, download), opts
             except yt_dlp.utils.DownloadError as err:
                 last_error = err
-                if is_bot_challenge(str(err)):
+                if is_retryable_youtube_error(str(err)):
                     continue
                 raise
         if last_error:
