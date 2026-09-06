@@ -16,7 +16,13 @@ from backend.app.core.logging import logger
 from backend.app.api.router import api_router
 from backend.app.services.cleanup_service import cleanup_worker
 from backend.app.services.ffmpeg_service import ffmpeg_service
-from backend.app.services.ytdlp_common import cookies_diagnostics, cookies_file, has_impersonate
+from backend.app.services.ytdlp_common import (
+    bgutil_script_available,
+    bgutil_script_home,
+    cookies_diagnostics,
+    cookies_file,
+    has_impersonate,
+)
 
 
 import time
@@ -67,10 +73,16 @@ async def lifespan(app: FastAPI):
                 else:
                     logger.warning(f"bgutil PO token server returned HTTP {resp.status}")
         except Exception as exc:
-            logger.warning(
-                f"bgutil PO token server not reachable at {bgutil_url} ({exc}). "
-                "YouTube will use logged-in cookies or android_vr fallback."
-            )
+            if bgutil_script_available():
+                logger.warning(
+                    f"bgutil HTTP server not reachable at {bgutil_url} ({exc}); "
+                    f"using script fallback at {bgutil_script_home()}"
+                )
+            else:
+                logger.warning(
+                    f"bgutil PO token server not reachable at {bgutil_url} ({exc}). "
+                    "YouTube downloads will likely fail on datacenter IPs."
+                )
     cleanup_worker.start()
     yield
 
@@ -216,8 +228,12 @@ async def health_check():
         except (urllib.error.URLError, TimeoutError, OSError):
             bgutil_reachable = False
 
+    script_home = bgutil_script_home()
+    script_available = bgutil_script_available()
+
     youtube_ready = (
         bgutil_reachable
+        or script_available
         or bool(cookie_info["has_login_info"] or cookie_info["has_sid"])
         or not bgutil_url
     )
@@ -237,5 +253,7 @@ async def health_check():
         "impersonate_available": has_impersonate(),
         "bgutil_pot_url": bgutil_url or None,
         "bgutil_reachable": bgutil_reachable,
+        "bgutil_script_home": script_home,
+        "bgutil_script_available": script_available,
         "youtube_ready": youtube_ready,
     }

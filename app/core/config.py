@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     YOUTUBE_PO_TOKEN: str = ""
     # Optional bgutil PO token HTTP server, e.g. http://127.0.0.1:4416
     BGUTIL_POT_BASE_URL: str = ""
+    # Optional bgutil script home (server folder with build/generate_once.js)
+    BGUTIL_SCRIPT_HOME: str = ""
     # On VPS, home-exported cookies often cause IP-mismatch blocks — keep False (anonymous clients first).
     YOUTUBE_COOKIES_FIRST: bool = False
 

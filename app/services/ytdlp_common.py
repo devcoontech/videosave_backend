@@ -63,6 +63,24 @@ FACEBOOK_IMPERSONATE = (
 
 _bgutil_cache: Dict[str, Any] = {"checked_at": 0.0, "reachable": False}
 
+DEFAULT_BGUTIL_SCRIPT_HOME = "/opt/bgutil-app"
+
+
+def bgutil_script_home() -> Optional[str]:
+    explicit = (settings.BGUTIL_SCRIPT_HOME or "").strip()
+    if explicit:
+        return explicit if Path(explicit).is_dir() else None
+    if Path(DEFAULT_BGUTIL_SCRIPT_HOME).is_dir():
+        return DEFAULT_BGUTIL_SCRIPT_HOME
+    return None
+
+
+def bgutil_script_available() -> bool:
+    home = bgutil_script_home()
+    if not home:
+        return False
+    return (Path(home) / "build" / "generate_once.js").is_file()
+
 
 def bgutil_is_reachable() -> bool:
     url = (settings.BGUTIL_POT_BASE_URL or "").strip()
@@ -241,6 +259,10 @@ def extractor_args_for(url: str, player_clients: Optional[List[str]] = None) -> 
     }
     if settings.BGUTIL_POT_BASE_URL and bgutil_is_reachable():
         args["youtubepot-bgutilhttp"] = {"base_url": [settings.BGUTIL_POT_BASE_URL]}
+    elif bgutil_script_available():
+        home = bgutil_script_home()
+        if home:
+            args["youtubepot-bgutilscript"] = {"server_home": [home]}
     return args
 
 
@@ -385,13 +407,13 @@ def is_age_or_login_error(message: str) -> bool:
 def youtube_bot_user_message() -> str:
     diag = cookies_diagnostics()
     bgutil_url = (settings.BGUTIL_POT_BASE_URL or "").strip()
-    if bgutil_url and not bgutil_is_reachable():
+    if bgutil_url and not bgutil_is_reachable() and not bgutil_script_available():
         return (
             "YouTube is blocked because the PO token server (bgutil) is not running. "
             "In Coolify: Rebuild the backend and check logs for 'bgutil PO token server is ready', "
             "OR add a second service with image brainicism/bgutil-ytdlp-pot-provider:1.3.2-node "
             "and set BGUTIL_POT_BASE_URL=http://<bgutil-service>:4416. "
-            "Check /api/health → bgutil_reachable must be true."
+            "Check /api/health → bgutil_reachable or bgutil_script_available must be true."
         )
     if not diag["configured"]:
         return (
