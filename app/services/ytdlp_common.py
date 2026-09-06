@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -50,6 +51,50 @@ FACEBOOK_IMPERSONATE = (
     "chrome-99:android-12",
     "chrome-133:macos-15",
 )
+
+_bgutil_cache: Dict[str, Any] = {"checked_at": 0.0, "reachable": False}
+
+
+def bgutil_is_reachable() -> bool:
+    url = (settings.BGUTIL_POT_BASE_URL or "").strip()
+    if not url:
+        return False
+    now = time.time()
+    if now - _bgutil_cache["checked_at"] < 30:
+        return bool(_bgutil_cache["reachable"])
+    reachable = False
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(url.rstrip("/") + "/ping", timeout=2) as resp:
+            reachable = resp.status == 200
+    except OSError:
+        reachable = False
+    _bgutil_cache["checked_at"] = now
+    _bgutil_cache["reachable"] = reachable
+    return reachable
+
+
+def normalize_youtube_watch_url(value: str, video_id: Optional[str] = None) -> str:
+    raw = (value or "").strip()
+    vid = (video_id or "").strip()
+    if not raw and vid:
+        return f"https://www.youtube.com/watch?v={vid}"
+    if not raw:
+        return raw
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    if raw.startswith("//"):
+        return f"https:{raw}"
+    if raw.startswith("/"):
+        return f"https://www.youtube.com{raw}"
+    if len(raw) == 11 and raw.replace("-", "").replace("_", "").isalnum():
+        return f"https://www.youtube.com/watch?v={raw}"
+    if "watch" in raw or "youtu.be" in raw:
+        return f"https://www.youtube.com/{raw.lstrip('/')}"
+    if vid:
+        return f"https://www.youtube.com/watch?v={vid}"
+    return raw
 
 
 def has_impersonate() -> bool:
@@ -185,7 +230,7 @@ def extractor_args_for(url: str, player_clients: Optional[List[str]] = None) -> 
             "api_hostname": ["api22-normal-c-useast1a.tiktokv.com"],
         },
     }
-    if settings.BGUTIL_POT_BASE_URL:
+    if settings.BGUTIL_POT_BASE_URL and bgutil_is_reachable():
         args["youtubepot-bgutilhttp"] = {"base_url": [settings.BGUTIL_POT_BASE_URL]}
     return args
 

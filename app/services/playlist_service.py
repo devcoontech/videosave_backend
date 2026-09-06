@@ -2,14 +2,14 @@ import asyncio
 import uuid
 import time
 from typing import List, Dict, Any, Optional
-import yt_dlp
 from fastapi import HTTPException, status
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
+from backend.app.core.security import validate_and_normalize_url
 from backend.app.models.playlist import PlaylistItem, PlaylistInfoResponse
 from backend.app.models.jobs import JobStatus
 from backend.app.services.download_service import download_manager
-from backend.app.services.ytdlp_common import base_ydl_opts
+from backend.app.services.ytdlp_common import extract_info_with_fallback, normalize_youtube_watch_url
 
 
 class PlaylistService:
@@ -17,13 +17,19 @@ class PlaylistService:
         self.playlist_jobs: Dict[str, dict] = {}
 
     def _sync_extract_playlist(self, url: str) -> Dict[str, Any]:
-        ydl_opts = base_ydl_opts(url, {"extract_flat": True, "skip_download": True, "ignoreerrors": True})
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    raise RuntimeError("Unable to extract playlist information.")
-                return info
+            info, _opts = extract_info_with_fallback(
+                url,
+                download=False,
+                extra_opts={
+                    "extract_flat": True,
+                    "skip_download": True,
+                    "ignoreerrors": True,
+                },
+            )
+            if not info:
+                raise RuntimeError("Unable to extract playlist information.")
+            return info
         except Exception as e:
             logger.error(f"Playlist extraction error: {e}")
             raise RuntimeError(str(e)) from e
@@ -52,7 +58,14 @@ class PlaylistService:
                 continue
             v_id = entry.get("id")
             v_title = entry.get("title", f"Video {index}")
-            v_url = entry.get("url") or f"https://www.youtube.com/watch?v={v_id}"
+            raw_url = entry.get("url") or entry.get("webpage_url") or ""
+            v_url = normalize_youtube_watch_url(str(raw_url), str(v_id) if v_id else None)
+            try:
+                v_url = validate_and_normalize_url(v_url)
+            except HTTPException:
+                if not v_id:
+                    continue
+                v_url = validate_and_normalize_url(f"https://www.youtube.com/watch?v={v_id}")
             raw_dur = entry.get("duration")
             duration = round(float(raw_dur)) if raw_dur is not None else None
             thumb = entry.get("thumbnail") or (entry.get("thumbnails", [{}])[-1].get("url") if entry.get("thumbnails") else None)
@@ -81,7 +94,12 @@ class PlaylistService:
     async def create_playlist_job(
         self, video_urls: List[str], format_id: str = "best", existing_job_id: Optional[str] = None
     ) -> str:
-        if settings.MAX_PLAYLIST_ITEMS > 0 and len(video_urls) > settings.MAX_PLAYLIST_ITEMS:
+        normalized_urls: List[str] = []
+        for raw in video_urls:
+            url = normalize_youtube_watch_url(raw)
+            normalized_urls.append(validate_and_normalize_url(url))
+
+        if settings.MAX_PLAYLIST_ITEMS > 0 and len(normalized_urls) > settings.MAX_PLAYLIST_ITEMS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -90,7 +108,6 @@ class PlaylistService:
                 },
             )
 
-        # Resume existing playlist job if available
         if existing_job_id and existing_job_id in self.playlist_jobs:
             pj = self.playlist_jobs[existing_job_id]
             pj["status"] = "in_progress"
@@ -100,9 +117,9 @@ class PlaylistService:
         playlist_job_id = str(uuid.uuid4())
         video_jobs = []
 
-        for url in video_urls:
+        for url in normalized_urls:
             job = download_manager.create_job(url, format_id=format_id)
-            video_jobs.append({"job_id": job.id, "url": url, "status": "queued"})
+            video_jobs.append({"job_id": job.id, "url": url, "status": "queued", "error": None})
 
         self.playlist_jobs[playlist_job_id] = {
             "id": playlist_job_id,
@@ -111,9 +128,9 @@ class PlaylistService:
             "completed": 0,
             "failed": 0,
             "status": "in_progress",
+            "current_job_id": video_jobs[0]["job_id"] if video_jobs else None,
         }
 
-        # Start batch processing asynchronously
         asyncio.create_task(self._process_playlist_batch(playlist_job_id, format_id))
         return playlist_job_id
 
@@ -122,24 +139,28 @@ class PlaylistService:
         if not pj:
             return
 
+        pj["completed"] = 0
+        pj["failed"] = 0
+
         for item in pj["video_jobs"]:
             if pj.get("status") == "cancelled":
                 logger.info(f"Playlist job {playlist_job_id} cancelled by user.")
                 break
 
-            # SKIP videos that have ALREADY been downloaded and marked completed
             if item.get("status") == "completed":
+                pj["completed"] += 1
                 continue
 
             job_id = item["job_id"]
             existing_job = download_manager.get_job(job_id)
 
-            # If job was cancelled in previous attempt, recreate clean job
             if existing_job and existing_job.status == JobStatus.CANCELLED:
                 new_job = download_manager.create_job(item["url"], format_id=format_id)
                 item["job_id"] = new_job.id
                 job_id = new_job.id
 
+            pj["current_job_id"] = job_id
+            item["status"] = "downloading"
             await download_manager.start_job(job_id, format_id=format_id)
 
             if pj.get("status") == "cancelled":
@@ -150,14 +171,18 @@ class PlaylistService:
             if job and job.status.value == "completed":
                 pj["completed"] += 1
                 item["status"] = "completed"
+                item["error"] = None
             elif job and job.status.value == "cancelled":
                 item["status"] = "cancelled"
+                item["error"] = job.error
                 pj["status"] = "cancelled"
                 break
             else:
                 pj["failed"] += 1
                 item["status"] = "failed"
+                item["error"] = job.error if job else "Download failed."
 
+        pj["current_job_id"] = None
         if pj.get("status") != "cancelled":
             pj["status"] = "completed"
 
@@ -170,7 +195,6 @@ class PlaylistService:
             )
         pj["status"] = "cancelled"
 
-        # Actively cancel all child video jobs in DownloadManager
         for item in pj.get("video_jobs", []):
             job_id = item.get("job_id")
             if job_id:
@@ -187,16 +211,44 @@ class PlaylistService:
             )
 
         total = pj["total"]
-        completed = pj["completed"]
-        progress = round((completed / total) * 100, 1) if total > 0 else 0.0
+        completed = 0
+        failed = 0
+        for item in pj["video_jobs"]:
+            job = download_manager.get_job(item.get("job_id", ""))
+            if item.get("status") == "completed" or (job and job.status.value == "completed"):
+                completed += 1
+                item["status"] = "completed"
+            elif item.get("status") == "failed" or (job and job.status.value == "failed"):
+                failed += 1
+                item["status"] = "failed"
+                if job and job.error:
+                    item["error"] = job.error
+
+        pj["completed"] = completed
+        pj["failed"] = failed
+
+        in_progress = max(0, total - completed - failed)
+        progress = round(((completed + failed * 0.5) / total) * 100, 1) if total > 0 else 0.0
+        if completed == total:
+            progress = 100.0
+
+        current_job_id = pj.get("current_job_id")
+        current_progress = None
+        if current_job_id:
+            job = download_manager.get_job(current_job_id)
+            if job:
+                current_progress = job.progress
 
         return {
             "success": True,
             "playlist_job_id": playlist_job_id,
             "total_videos": total,
             "completed_videos": completed,
-            "failed_videos": pj["failed"],
+            "failed_videos": failed,
+            "in_progress_videos": in_progress,
             "overall_progress": progress,
+            "current_job_id": current_job_id,
+            "current_video_progress": current_progress,
             "status": pj.get("status", "in_progress"),
             "video_jobs": pj["video_jobs"],
         }
