@@ -1,4 +1,3 @@
-import os
 import asyncio
 from typing import Dict, Any, List
 import yt_dlp
@@ -7,37 +6,11 @@ from backend.app.core.logging import logger
 from backend.app.core.security import validate_and_normalize_url
 from backend.app.utils.urls import detect_platform
 from backend.app.models.media import MediaFormat, MediaInfoResponse
-from backend.app.services.ffmpeg_service import ffmpeg_service
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-COOKIES_FILE = os.path.join(BASE_DIR, "cookies.txt")
+from backend.app.services.ytdlp_common import base_ydl_opts, is_bot_challenge, platform_headers
 
 
 def get_platform_headers(url: str) -> dict:
-    url_lower = url.lower()
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    if "tiktok.com" in url_lower:
-        return {
-            "User-Agent": ua,
-            "Referer": "https://www.tiktok.com/",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-    elif "instagram.com" in url_lower:
-        return {
-            "User-Agent": ua,
-            "Referer": "https://www.instagram.com/",
-        }
-    elif "facebook.com" in url_lower or "fb.watch" in url_lower:
-        return {
-            "User-Agent": ua,
-            "Referer": "https://www.facebook.com/",
-        }
-    else:
-        return {
-            "User-Agent": ua,
-            "Referer": "https://www.youtube.com/",
-        }
+    return platform_headers(url)
 
 
 class ExtractorFailure(Exception):
@@ -49,30 +22,6 @@ class ExtractorFailure(Exception):
 
 
 class MediaExtractor:
-    def __init__(self):
-        self.base_options = {
-            "quiet": True,
-            "no_warnings": True,
-            "ignoreerrors": False,
-            "retries": 10,
-            "fragment_retries": 10,
-            "file_access_retries": 5,
-            "socket_timeout": 60,
-            "continuedl": True,
-            "noplaylist": True,
-            "extractor_args": {
-                "tiktok": {
-                    "app_version": "33.0.0",
-                    "manifest_app_version": "33000",
-                },
-            },
-
-        }
-
-        ffmpeg_loc = ffmpeg_service.get_ffmpeg_location()
-        if ffmpeg_loc:
-            self.base_options["ffmpeg_location"] = ffmpeg_loc
-
     def _format_height_quality(self, height: int) -> str:
         if height >= 2160:
             return "2160p (4K)"
@@ -92,27 +41,40 @@ class MediaExtractor:
             return "144p"
         return f"{height}p"
 
+    def _extract_once(self, url: str, player_clients: List[str] | None = None) -> Dict[str, Any]:
+        options = base_ydl_opts(
+            url,
+            {
+                "extract_flat": False,
+                "skip_download": True,
+            },
+        )
+        if player_clients:
+            youtube_args = dict(options.get("extractor_args", {}).get("youtube", {}))
+            youtube_args["player_client"] = player_clients
+            options.setdefault("extractor_args", {})["youtube"] = youtube_args
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise Exception("No information returned by extractor.")
+            return info
+
     def _sync_extract_info(self, url: str) -> Dict[str, Any]:
-        options = {
-            **self.base_options,
-            "extract_flat": False,
-            "skip_download": True,
-            "http_headers": get_platform_headers(url),
-        }
-
-        # Attach optional cookies.txt if provided
-        if os.path.exists(COOKIES_FILE):
-            options["cookiefile"] = COOKIES_FILE
-
         try:
-            with yt_dlp.YoutubeDL(options) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    raise Exception("No information returned by extractor.")
-                return info
-        except yt_dlp.utils.DownloadError as de:
+            return self._extract_once(url)
+        except yt_dlp.utils.DownloadError as first_error:
+            if is_bot_challenge(str(first_error)):
+                try:
+                    return self._extract_once(url, player_clients=["android", "ios"])
+                except Exception as retry_error:
+                    logger.error(f"YouTube bot retry failed for {url}: {retry_error}")
+                    raise ExtractorFailure(
+                        status.HTTP_403_FORBIDDEN,
+                        "BOT_VERIFICATION_REQUIRED",
+                        "YouTube blocked this request. Try again in a minute, or add a cookies.txt file on the server.",
+                    ) from retry_error
 
-            err_msg = str(de).lower()
+            err_msg = str(first_error).lower()
             if "private video" in err_msg or "login" in err_msg:
                 raise ExtractorFailure(
                     status.HTTP_403_FORBIDDEN,
@@ -131,12 +93,6 @@ class MediaExtractor:
                     "GEO_RESTRICTED",
                     "This content is geo-restricted in your area.",
                 )
-            elif "bot" in err_msg or "sign in to confirm" in err_msg:
-                raise ExtractorFailure(
-                    status.HTTP_403_FORBIDDEN,
-                    "BOT_VERIFICATION_REQUIRED",
-                    "YouTube bot verification triggered. Please try again or check the URL.",
-                )
             elif "age" in err_msg:
                 raise ExtractorFailure(
                     status.HTTP_403_FORBIDDEN,
@@ -144,7 +100,7 @@ class MediaExtractor:
                     "Age-restricted video requiring authentication.",
                 )
             else:
-                logger.error(f"yt-dlp extraction error for {url}: {de}")
+                logger.error(f"yt-dlp extraction error for {url}: {first_error}")
                 raise ExtractorFailure(
                     status.HTTP_400_BAD_REQUEST,
                     "EXTRACTION_FAILED",

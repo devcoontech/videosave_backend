@@ -13,7 +13,7 @@ def detect_platform(url: str) -> str:
         query = parse_qs(parsed.query)
 
         # YouTube check
-        if any(h in hostname for h in ["youtube.com", "youtu.be"]):
+        if any(h in hostname for h in ["youtube.com", "youtu.be", "music.youtube.com"]):
             # Check playlist
             if "list" in query or "/playlist" in path:
                 return "youtube_playlist"
@@ -28,8 +28,8 @@ def detect_platform(url: str) -> str:
             return "instagram"
 
         # Facebook check
-        if any(h in hostname for h in ["facebook.com", "fb.watch"]):
-            if "/reel/" in path or "/watch/" in path or "/videos/" in path or hostname == "fb.watch":
+        if any(h in hostname for h in ["facebook.com", "fb.watch", "fb.me"]):
+            if "/reel/" in path or "/watch/" in path or "/videos/" in path or "/share/" in path or hostname in ("fb.watch", "fb.me"):
                 return "facebook"
             return "facebook"
 

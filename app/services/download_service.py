@@ -1,21 +1,23 @@
 import os
-import sys
 import time
 import uuid
 import asyncio
 from typing import Dict, Optional, Set
 from fastapi import WebSocket
+import yt_dlp
+import shutil
 
-from backend.app.core.config import settings, BASE_DIR, DOWNLOADS_PATH
+from backend.app.core.config import settings, DOWNLOADS_PATH
 from backend.app.core.logging import logger
 from backend.app.models.jobs import DownloadJob, JobStatus
 from backend.app.utils.urls import detect_platform
 from backend.app.utils.filenames import sanitize_filename
-from backend.app.services.ffmpeg_service import ffmpeg_service
-import yt_dlp
+from backend.app.services.ytdlp_common import (
+    base_ydl_opts,
+    format_selector,
+    is_bot_challenge,
+)
 
-
-import shutil
 
 class DownloadManager:
     def __init__(self):
@@ -186,59 +188,20 @@ class DownloadManager:
                 asyncio.run_coroutine_threadsafe(self.broadcast_job_update(job), loop)
 
         is_mp3 = (format_id or "").lower() in ("mp3", "audio", "bestaudio")
-
-        # Build format selector for video quality or MP3 audio extraction
-        if is_mp3:
-            fmt_str = "bestaudio/best"
-            fmt_sort = ["abr", "size"]
-        elif not format_id or format_id == "best":
-            fmt_str = "bestvideo+bestaudio/best"
-            fmt_sort = ["res", "fps", "codec:h264", "size"]
-        else:
-            clean_h = format_id.rstrip("p")
-            if clean_h.isdigit():
-                h_val = int(clean_h)
-                fmt_str = (
-                    f"bestvideo[height<={h_val}]+bestaudio/"
-                    f"best[height<={h_val}]/"
-                    f"bestvideo+bestaudio/best"
-                )
-                fmt_sort = [f"res:{h_val}", "fps", "size"]
-            else:
-                fmt_str = (
-                    f"{format_id}+bestaudio/"
-                    f"bestvideo[format_id={format_id}]+bestaudio/"
-                    f"{format_id}/"
-                    f"bestvideo+bestaudio/best"
-                )
-                fmt_sort = ["res", "fps", "codec:h264", "size"]
-
-        from backend.app.services.extractor import get_platform_headers
-
+        platform = detect_platform(job.url)
+        fmt_str = format_selector(job.url, format_id)
         quality_slug = sanitize_filename("MP3" if is_mp3 else (format_id if format_id and format_id != "best" else "best"))
 
-        ydl_opts = {
-            "format": fmt_str,
-            "format_sort": fmt_sort,
-            "outtmpl": os.path.join(output_dir, f"%(title)s - {quality_slug} [{job.id[:8]}].%(ext)s"),
-            "progress_hooks": [progress_hook],
-            "quiet": True,
-            "no_warnings": True,
-            "retries": 10,
-            "fragment_retries": 10,
-            "file_access_retries": 5,
-            "socket_timeout": 60,
-            "overwrites": True,
-            "continuedl": False,
-            "noplaylist": True,
-            "http_headers": get_platform_headers(job.url),
-            "extractor_args": {
-                "tiktok": {
-                    "app_version": "33.0.0",
-                    "manifest_app_version": "33000",
-                },
+        ydl_opts = base_ydl_opts(
+            job.url,
+            {
+                "format": fmt_str,
+                "outtmpl": os.path.join(output_dir, f"%(title)s - {quality_slug} [{job.id[:8]}].%(ext)s"),
+                "progress_hooks": [progress_hook],
+                "overwrites": True,
+                "continuedl": False,
             },
-        }
+        )
 
         if is_mp3:
             ydl_opts["postprocessors"] = [
@@ -248,25 +211,19 @@ class DownloadManager:
                     "preferredquality": "192",
                 }
             ]
-        else:
+        elif platform not in ("facebook", "instagram", "tiktok"):
             ydl_opts["merge_output_format"] = "mp4"
 
-
-
-
-        cookie_file = str(BASE_DIR / "cookies.txt")
-        if os.path.exists(cookie_file):
-            ydl_opts["cookiefile"] = cookie_file
-
-        ffmpeg_loc = ffmpeg_service.get_ffmpeg_location()
-        if ffmpeg_loc:
-            ydl_opts["ffmpeg_location"] = ffmpeg_loc
-
         try:
-            def _execute_ydl():
+            def _execute_ydl(player_clients: Optional[list] = None):
                 if job.status == JobStatus.CANCELLED:
                     raise Exception("DOWNLOAD_CANCELLED")
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                opts = dict(ydl_opts)
+                if player_clients:
+                    youtube_args = dict(opts.get("extractor_args", {}).get("youtube", {}))
+                    youtube_args["player_client"] = player_clients
+                    opts.setdefault("extractor_args", {})["youtube"] = youtube_args
+                with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(job.url, download=True)
                     filename = ydl.prepare_filename(info)
                     if not os.path.exists(filename):
@@ -277,10 +234,18 @@ class DownloadManager:
                                 break
                     return info, filename
 
-            # Execute with configurable hard timeout per download job
+            def _download_with_retry():
+                try:
+                    return _execute_ydl()
+                except yt_dlp.utils.DownloadError as err:
+                    if is_bot_challenge(str(err)) and detect_platform(job.url) == "youtube":
+                        logger.warning(f"YouTube bot challenge on download, retrying with android client: {job.id}")
+                        return _execute_ydl(player_clients=["android", "ios"])
+                    raise
+
             info, final_filepath = await asyncio.wait_for(
-                asyncio.to_thread(_execute_ydl),
-                timeout=settings.DOWNLOAD_TIMEOUT_SECONDS
+                asyncio.to_thread(_download_with_retry),
+                timeout=settings.DOWNLOAD_TIMEOUT_SECONDS,
             )
 
             if job.status == JobStatus.CANCELLED:
@@ -332,10 +297,16 @@ class DownloadManager:
                 logger.error(f"Download timed out for job {job.id}")
                 job.status = JobStatus.FAILED
                 job.error = "Download request timed out (exceeded 10 minutes limit)."
+            elif isinstance(e, yt_dlp.utils.DownloadError) and is_bot_challenge(str(e)):
+                job.status = JobStatus.FAILED
+                job.error = "YouTube blocked this download. Try again later or add cookies.txt on the server."
             else:
                 logger.error(f"Download failed for job {job.id}: {e}")
                 job.status = JobStatus.FAILED
-                job.error = str(e)
+                err_text = str(e)
+                if len(err_text) > 200:
+                    err_text = err_text[:200] + "..."
+                job.error = err_text or "Download failed."
             await self.broadcast_job_update(job)
 
     def _cleanup_job_files(self, job_id: str, output_dir: str):

@@ -9,7 +9,7 @@ from backend.app.core.logging import logger
 from backend.app.models.playlist import PlaylistItem, PlaylistInfoResponse
 from backend.app.models.jobs import JobStatus
 from backend.app.services.download_service import download_manager
-from backend.app.services.ffmpeg_service import ffmpeg_service
+from backend.app.services.ytdlp_common import base_ydl_opts
 
 
 class PlaylistService:
@@ -17,17 +17,7 @@ class PlaylistService:
         self.playlist_jobs: Dict[str, dict] = {}
 
     def _sync_extract_playlist(self, url: str) -> Dict[str, Any]:
-        ydl_opts = {
-            "extract_flat": True,
-            "skip_download": True,
-            "quiet": True,
-            "no_warnings": True,
-            "ignoreerrors": True,
-        }
-        ffmpeg_loc = ffmpeg_service.get_ffmpeg_location()
-        if ffmpeg_loc:
-            ydl_opts["ffmpeg_location"] = ffmpeg_loc
-
+        ydl_opts = base_ydl_opts(url, {"extract_flat": True, "skip_download": True, "ignoreerrors": True})
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
