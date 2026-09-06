@@ -34,10 +34,17 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Ensure directories exist
+# Resolve from the real package path so Docker symlinks (/app/backend/app -> /app/app)
+# do not create a second downloads folder that the file route then rejects.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-DOWNLOADS_PATH = BASE_DIR / settings.DOWNLOAD_DIR
-TEMP_PATH = BASE_DIR / settings.TEMP_DIR
 
-DOWNLOADS_PATH.mkdir(parents=True, exist_ok=True)
-TEMP_PATH.mkdir(parents=True, exist_ok=True)
+
+def _resolve_data_dir(value: str) -> Path:
+    raw = Path(value)
+    path = raw if raw.is_absolute() else (BASE_DIR / raw)
+    path.mkdir(parents=True, exist_ok=True)
+    return path.resolve()
+
+
+DOWNLOADS_PATH = _resolve_data_dir(settings.DOWNLOAD_DIR)
+TEMP_PATH = _resolve_data_dir(settings.TEMP_DIR)

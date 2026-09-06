@@ -6,19 +6,13 @@ import asyncio
 from typing import Dict, Optional, Set
 from fastapi import WebSocket
 
-from backend.app.core.config import settings
+from backend.app.core.config import settings, BASE_DIR, DOWNLOADS_PATH
 from backend.app.core.logging import logger
 from backend.app.models.jobs import DownloadJob, JobStatus
 from backend.app.utils.urls import detect_platform
 from backend.app.utils.filenames import sanitize_filename
 from backend.app.services.ffmpeg_service import ffmpeg_service
 import yt_dlp
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DOWNLOADS_PATH = os.path.join(BASE_DIR, settings.DOWNLOAD_DIR)
-TEMP_PATH = os.path.join(BASE_DIR, settings.TEMP_DIR)
-os.makedirs(DOWNLOADS_PATH, exist_ok=True)
-os.makedirs(TEMP_PATH, exist_ok=True)
 
 
 import shutil
@@ -260,7 +254,7 @@ class DownloadManager:
 
 
 
-        cookie_file = os.path.join(BASE_DIR, "cookies.txt")
+        cookie_file = str(BASE_DIR / "cookies.txt")
         if os.path.exists(cookie_file):
             ydl_opts["cookiefile"] = cookie_file
 

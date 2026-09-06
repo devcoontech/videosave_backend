@@ -1,5 +1,5 @@
 import os
-import asyncio
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, status, BackgroundTasks
 from fastapi.responses import FileResponse
 from backend.app.models.jobs import DownloadRequest, DownloadJobResponse, DownloadJob
@@ -63,10 +63,10 @@ async def download_job_file(job_id: str):
             detail={"code": "FILE_NOT_READY", "message": "File is not ready or has not finished downloading."},
         )
 
-    # Path traversal protection check
-    real_filepath = os.path.realpath(job.filepath)
-    real_downloads_dir = os.path.realpath(str(DOWNLOADS_PATH))
-    if not real_filepath.startswith(real_downloads_dir):
+    # Allow files inside the downloads directory, including Docker volume mounts
+    try:
+        Path(job.filepath).resolve().relative_to(Path(DOWNLOADS_PATH).resolve())
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "ACCESS_DENIED", "message": "Access to requested file path is forbidden."},
