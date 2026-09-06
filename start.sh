@@ -1,40 +1,34 @@
 #!/bin/sh
 
-BGUTIL_MAIN=""
-for candidate in \
-  /opt/bgutil-app/server/build/main.js \
-  /opt/bgutil/server/build/main.js \
-  /opt/bgutil-app/build/main.js
-do
-  if [ -f "$candidate" ]; then
-    BGUTIL_MAIN="$candidate"
-    break
-  fi
-done
+BGUTIL_ROOT="/opt/bgutil-app"
+BGUTIL_MAIN="$BGUTIL_ROOT/build/main.js"
 
-if [ -z "$BGUTIL_MAIN" ]; then
-  BGUTIL_MAIN=$(find /opt/bgutil-app -path '*/build/main.js' 2>/dev/null | head -1)
-fi
-
-if [ -n "$BGUTIL_MAIN" ] && [ -f "$BGUTIL_MAIN" ]; then
-  BGUTIL_DIR=$(dirname "$BGUTIL_MAIN")
-  echo "[start] Launching bgutil from $BGUTIL_MAIN"
-  (cd "$BGUTIL_DIR/.." && node "$BGUTIL_MAIN" --port 4416) &
+if [ -f "$BGUTIL_MAIN" ]; then
+  echo "[start] Launching bgutil PO token server from $BGUTIL_MAIN"
+  cd "$BGUTIL_ROOT" || exit 1
+  node build/main.js --host 127.0.0.1 --port 4416 &
+  BGUTIL_PID=$!
   i=0
-  while [ "$i" -lt 20 ]; do
+  while [ "$i" -lt 25 ]; do
     if curl -sf "http://127.0.0.1:4416/ping" >/dev/null 2>&1; then
-      echo "[start] bgutil PO token server is ready"
+      echo "[start] bgutil PO token server is ready (pid $BGUTIL_PID)"
+      break
+    fi
+    if ! kill -0 "$BGUTIL_PID" 2>/dev/null; then
+      echo "[start] ERROR: bgutil process exited early"
       break
     fi
     i=$((i + 1))
     sleep 1
   done
   if ! curl -sf "http://127.0.0.1:4416/ping" >/dev/null 2>&1; then
-    echo "[start] WARNING: bgutil not responding — YouTube uses android_vr without cookies"
+    echo "[start] WARNING: bgutil not responding on :4416/ping"
+    echo "[start] Add a separate Coolify service: brainicism/bgutil-ytdlp-pot-provider:1.3.2-node"
+    echo "[start] Then set BGUTIL_POT_BASE_URL=http://<that-service-hostname>:4416"
   fi
 else
-  echo "[start] WARNING: bgutil main.js not found under /opt/bgutil-app"
-  ls -la /opt/bgutil-app 2>/dev/null || true
+  echo "[start] ERROR: missing $BGUTIL_MAIN"
+  ls -la "$BGUTIL_ROOT" 2>/dev/null || echo "[start] /opt/bgutil-app not found — Docker build may have failed"
 fi
 
 echo "[start] Starting uvicorn on port ${PORT:-8000}..."

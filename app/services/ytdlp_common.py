@@ -384,10 +384,20 @@ def is_age_or_login_error(message: str) -> bool:
 
 def youtube_bot_user_message() -> str:
     diag = cookies_diagnostics()
+    bgutil_url = (settings.BGUTIL_POT_BASE_URL or "").strip()
+    if bgutil_url and not bgutil_is_reachable():
+        return (
+            "YouTube is blocked because the PO token server (bgutil) is not running. "
+            "In Coolify: Rebuild the backend and check logs for 'bgutil PO token server is ready', "
+            "OR add a second service with image brainicism/bgutil-ytdlp-pot-provider:1.3.2-node "
+            "and set BGUTIL_POT_BASE_URL=http://<bgutil-service>:4416. "
+            "Check /api/health → bgutil_reachable must be true."
+        )
     if not diag["configured"]:
         return (
-            "YouTube blocked this server's IP. Export YouTube cookies from Firefox "
-            "(extension: Get cookies.txt LOCALLY), mount the file at /app/cookies.txt in Coolify, and redeploy."
+            "YouTube blocked this datacenter IP. Do NOT use home PC cookies on VPS — they make it worse. "
+            "You need bgutil PO tokens: rebuild backend or add bgutil sidecar (see cookies.txt.example). "
+            "Verify /api/health shows bgutil_reachable: true."
         )
     if diag["youtube_entries"] == 0:
         return (

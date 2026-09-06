@@ -1,5 +1,4 @@
-# Pre-built bgutil PO token server (official image — no npm build in our layer)
-FROM brainicism/bgutil-ytdlp-pot-provider:1.3.2 AS bgutil
+FROM brainicism/bgutil-ytdlp-pot-provider:1.3.2-node AS bgutil
 
 FROM python:3.11-slim
 
@@ -11,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy compiled bgutil server from official image
+# Official image layout: /app/build/main.js + /app/node_modules
 COPY --from=bgutil /app /opt/bgutil-app
 
 WORKDIR /app
@@ -24,7 +23,8 @@ COPY . .
 
 RUN mkdir -p /app/downloads /app/temp \
     && mkdir -p /app/backend && ln -s /app/app /app/backend/app \
-    && chmod +x /app/start.sh
+    && chmod +x /app/start.sh \
+    && test -f /opt/bgutil-app/build/main.js
 
 ENV PYTHONPATH=/app
 ENV BGUTIL_POT_BASE_URL=http://127.0.0.1:4416

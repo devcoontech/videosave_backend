@@ -1,15 +1,25 @@
-# cookies.txt — optional for VPS YouTube (often causes IP-mismatch blocks!)
+# YouTube on VPS (Contabo/Coolify) — REQUIRED setup
 #
-# On Contabo/VPS: YouTube works via bgutil PO tokens + android_vr WITHOUT cookies.
-# If you see "YouTube blocked this request", REMOVE cookies.txt from the server.
+# Home cookies DO NOT work on VPS. You need bgutil PO tokens.
 #
-# cookies.txt IS useful for:
-#   - Local development on your PC
-#   - Age-restricted videos (set YOUTUBE_COOKIES_FIRST=true AND cookies from same network)
-#   - Facebook / Instagram private content
+# === Option A: Built into backend Docker (automatic) ===
+# Rebuild backend. Check logs for:
+#   [start] bgutil PO token server is ready
+# Health: bgutil_reachable: true
 #
-# Coolify env (recommended for VPS):
-#   YOUTUBE_COOKIES_FIRST=false
-#   BGUTIL_POT_BASE_URL=http://127.0.0.1:4416
+# === Option B: Separate Coolify service (most reliable) ===
 #
-# Verify: GET /api/health → bgutil_reachable: true, youtube_ready: true
+# 1. New Resource → Docker Image
+#    Image: brainicism/bgutil-ytdlp-pot-provider:1.3.2-node
+#    Port: 4416 (expose internally, not public)
+#    Name: bgutil (or any name)
+#
+# 2. Backend env var:
+#    BGUTIL_POT_BASE_URL=http://bgutil:4416
+#    (use the internal hostname Coolify assigns)
+#
+# 3. Rebuild backend, verify /api/health:
+#    "bgutil_reachable": true
+#    "youtube_ready": true
+#
+# Do NOT mount cookies.txt for YouTube on VPS.
