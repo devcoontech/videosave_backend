@@ -38,25 +38,23 @@ def build_youtube_try_plans() -> List[Tuple[List[str], bool]]:
         (["web_creator"], True),
     ]
     anonymous_plans: List[Tuple[List[str], bool]] = [
-        (["web_embedded"], False),
-        (["android"], False),
+        (["web"], False),
+        (["web", "mweb"], False),
         (["mweb"], False),
+        (["android"], False),
         (["ios"], False),
-        (["tv_embedded"], False),
         (["web_safari"], False),
-        (["tv", "web_safari"], False),
+        (["web_embedded"], False),
+        (["tv"], False),
+        (["tv_embedded"], False),
         (["android_vr"], False),
     ]
     has_login = has_logged_in_cookies()
 
-    if settings.YOUTUBE_COOKIES_FIRST and has_login:
+    if has_login:
         return cookie_plans + anonymous_plans
 
-    # Default: PO-token anonymous clients only; never fall back to guest cookies on VPS.
-    plans = list(anonymous_plans)
-    if has_login:
-        plans.extend(cookie_plans)
-    return plans
+    return anonymous_plans
 
 
 PROGRESSIVE_PLATFORMS = frozenset({"facebook", "instagram", "tiktok"})
@@ -382,9 +380,6 @@ def extractor_args_for(url: str, player_clients: Optional[List[str]] = None) -> 
     }
     if settings.YOUTUBE_PO_TOKEN:
         youtube_args["po_token"] = [settings.YOUTUBE_PO_TOKEN]
-    if pot_provider_ready():
-        # Skip the watch-page fetch that triggers datacenter bot checks; PO tokens handle player API.
-        youtube_args["player_skip"] = ["webpage"]
 
     args: Dict[str, Any] = {
         "youtube": youtube_args,
@@ -798,6 +793,7 @@ def download_media_with_fallback(
                 )
             except yt_dlp.utils.DownloadError as err:
                 last_error = err
+                _youtube_client_cache.pop(_youtube_video_id(url), None)
                 logger.info(
                     "YouTube download with cached client %s failed, reprobing: %s",
                     clients,
