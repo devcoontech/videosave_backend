@@ -41,7 +41,10 @@ RUN mkdir -p /app/downloads /app/temp \
     && test -f /opt/bgutil-app/build/generate_once.js \
     && node /opt/bgutil-app/build/generate_once.js --version \
     && node -e "require('/opt/bgutil-app/node_modules/canvas'); console.log('canvas ok')" \
-    && python -c "import pathlib; assert list(pathlib.Path('/usr/local/lib/python3.11/site-packages/yt_dlp_plugins/extractor').glob('getpot_bgutil*.py')), 'bgutil plugin missing'"
+    && python -c "import pathlib; assert list(pathlib.Path('/usr/local/lib/python3.11/site-packages/yt_dlp_plugins/extractor').glob('getpot_bgutil*.py')), 'bgutil plugin missing'" \
+    && cd /opt/bgutil-app && node build/main.js --port 4416 >/tmp/bgutil-build.log 2>&1 & \
+    sleep 4 && curl -sf http://127.0.0.1:4416/ping >/dev/null \
+    && kill $! 2>/dev/null || (cat /tmp/bgutil-build.log && exit 1)
 
 ENV PYTHONPATH=/app
 ENV BGUTIL_POT_BASE_URL=http://127.0.0.1:4416

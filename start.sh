@@ -28,7 +28,8 @@ fi
 if [ -f "$BGUTIL_MAIN" ]; then
   echo "[start] Launching bgutil PO token server from $BGUTIL_MAIN"
   cd "$BGUTIL_ROOT" || exit 1
-  node build/main.js --host 0.0.0.0 --port 4416 >"$BGUTIL_LOG" 2>&1 &
+  # bgutil 1.3.x only supports --port (no --host); it binds [::] then falls back to 0.0.0.0
+  node build/main.js --port 4416 >"$BGUTIL_LOG" 2>&1 &
   BGUTIL_PID=$!
   i=0
   while [ "$i" -lt 25 ]; do
