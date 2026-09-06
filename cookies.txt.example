@@ -1,16 +1,15 @@
-# cookies.txt — one file for ALL platforms (YouTube, Facebook, Instagram, TikTok)
+# cookies.txt — optional for VPS YouTube (often causes IP-mismatch blocks!)
 #
-# Export while logged in to EACH platform you need:
-#   1. youtube.com   → export current site
-#   2. facebook.com  → export current site (append or re-export all)
-#   3. instagram.com → export current site
-#   4. tiktok.com    → export current site
+# On Contabo/VPS: YouTube works via bgutil PO tokens + android_vr WITHOUT cookies.
+# If you see "YouTube blocked this request", REMOVE cookies.txt from the server.
 #
-# Or use one export from a browser profile logged into all of them.
-# The file MUST contain SID + LOGIN_INFO for YouTube age-restricted videos.
+# cookies.txt IS useful for:
+#   - Local development on your PC
+#   - Age-restricted videos (set YOUTUBE_COOKIES_FIRST=true AND cookies from same network)
+#   - Facebook / Instagram private content
 #
-# Coolify: mount at /app/cookies.txt — never commit to Git.
+# Coolify env (recommended for VPS):
+#   YOUTUBE_COOKIES_FIRST=false
+#   BGUTIL_POT_BASE_URL=http://127.0.0.1:4416
 #
-# Verify: GET /api/health
-#   cookies_has_login: true
-#   cookies_youtube_entries > 0
+# Verify: GET /api/health → bgutil_reachable: true, youtube_ready: true

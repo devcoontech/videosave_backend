@@ -1,25 +1,40 @@
 #!/bin/sh
-set -e
 
-BGUTIL_MAIN="/opt/bgutil/server/build/main.js"
+BGUTIL_MAIN=""
+for candidate in \
+  /opt/bgutil-app/server/build/main.js \
+  /opt/bgutil/server/build/main.js \
+  /opt/bgutil-app/build/main.js
+do
+  if [ -f "$candidate" ]; then
+    BGUTIL_MAIN="$candidate"
+    break
+  fi
+done
 
-if [ -f "$BGUTIL_MAIN" ]; then
-  echo "[start] Launching bgutil PO token server on 127.0.0.1:4416..."
-  node "$BGUTIL_MAIN" --host 127.0.0.1 &
+if [ -z "$BGUTIL_MAIN" ]; then
+  BGUTIL_MAIN=$(find /opt/bgutil-app -path '*/build/main.js' 2>/dev/null | head -1)
+fi
+
+if [ -n "$BGUTIL_MAIN" ] && [ -f "$BGUTIL_MAIN" ]; then
+  BGUTIL_DIR=$(dirname "$BGUTIL_MAIN")
+  echo "[start] Launching bgutil from $BGUTIL_MAIN"
+  (cd "$BGUTIL_DIR/.." && node "$BGUTIL_MAIN" --host 127.0.0.1) &
   i=0
-  while [ "$i" -lt 15 ]; do
+  while [ "$i" -lt 20 ]; do
     if curl -sf "http://127.0.0.1:4416/ping" >/dev/null 2>&1; then
-      echo "[start] bgutil is ready"
+      echo "[start] bgutil PO token server is ready"
       break
     fi
     i=$((i + 1))
     sleep 1
   done
   if ! curl -sf "http://127.0.0.1:4416/ping" >/dev/null 2>&1; then
-    echo "[start] WARNING: bgutil did not respond on /ping — YouTube will use cookies/android_vr fallback"
+    echo "[start] WARNING: bgutil not responding — YouTube uses android_vr without cookies"
   fi
 else
-  echo "[start] WARNING: bgutil not built at $BGUTIL_MAIN — skipping PO token server"
+  echo "[start] WARNING: bgutil main.js not found under /opt/bgutil-app"
+  ls -la /opt/bgutil-app 2>/dev/null || true
 fi
 
 echo "[start] Starting uvicorn on port ${PORT:-8000}..."

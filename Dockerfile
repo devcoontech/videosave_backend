@@ -1,24 +1,18 @@
+# Pre-built bgutil PO token server (official image — no npm build in our layer)
+FROM brainicism/bgutil-ytdlp-pot-provider:1.3.2 AS bgutil
+
 FROM python:3.11-slim
 
-# FFmpeg + Node 22 (bgutil requires >=22) + canvas build deps for bgutil
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     ca-certificates \
     curl \
-    git \
-    build-essential \
-    libcairo2-dev \
-    libpango1.0-dev \
-    libjpeg-dev \
-    libgif-dev \
-    librsvg2-dev \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && git clone --single-branch --branch 1.3.2 --depth 1 \
-        https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /opt/bgutil \
-    && cd /opt/bgutil/server && npm ci && npx tsc \
-    && test -f /opt/bgutil/server/build/main.js \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy compiled bgutil server from official image
+COPY --from=bgutil /app /opt/bgutil-app
 
 WORKDIR /app
 
@@ -34,6 +28,7 @@ RUN mkdir -p /app/downloads /app/temp \
 
 ENV PYTHONPATH=/app
 ENV BGUTIL_POT_BASE_URL=http://127.0.0.1:4416
+ENV YOUTUBE_COOKIES_FIRST=false
 EXPOSE 8000
 
 CMD ["/app/start.sh"]

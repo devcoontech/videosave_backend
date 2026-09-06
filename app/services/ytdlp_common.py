@@ -21,7 +21,7 @@ def has_logged_in_cookies() -> bool:
 
 
 def build_youtube_try_plans() -> List[Tuple[List[str], bool]]:
-    """When logged-in cookies exist, use them first (age-restricted/private videos)."""
+    """Anonymous clients first on VPS — home cookies + datacenter IP triggers bot blocks."""
     cookie_plans: List[Tuple[List[str], bool]] = [
         (["web"], True),
         (["web", "web_safari"], True),
@@ -30,18 +30,27 @@ def build_youtube_try_plans() -> List[Tuple[List[str], bool]]:
     ]
     anonymous_plans: List[Tuple[List[str], bool]] = [
         (["android_vr"], False),
+        (["tv_embedded"], False),
         (["tv", "web_safari"], False),
         (["web_safari"], False),
-        (["tv_embedded"], False),
         (["android"], False),
         (["mweb"], False),
+        (["ios"], False),
         (["android", "ios"], False),
     ]
-    if has_logged_in_cookies():
+    has_cookies = bool(cookies_file())
+    has_login = has_logged_in_cookies()
+
+    if settings.YOUTUBE_COOKIES_FIRST and has_login:
         return cookie_plans + anonymous_plans
-    if cookies_file():
-        return anonymous_plans + cookie_plans
-    return anonymous_plans
+    if settings.YOUTUBE_COOKIES_FIRST and has_cookies:
+        return cookie_plans + anonymous_plans
+
+    # Default: no-cookie clients first (works on most VPS IPs with bgutil or android_vr)
+    plans = list(anonymous_plans)
+    if has_login or has_cookies:
+        plans.extend(cookie_plans)
+    return plans
 
 
 PROGRESSIVE_PLATFORMS = frozenset({"facebook", "instagram", "tiktok"})
@@ -391,9 +400,9 @@ def youtube_bot_user_message() -> str:
             "Log into YouTube in Firefox, export cookies for the current site, and re-upload."
         )
     return (
-        "YouTube blocked this request from the server IP. Home-exported cookies often fail on VPS "
-        "because the IP differs. Redeploy with the latest backend (uses android_vr without cookies), "
-        "or add the bgutil PO-token sidecar — see cookies.txt.example."
+        "YouTube blocked all download methods from this server. "
+        "Rebuild the backend so bgutil PO tokens start (check /api/health → bgutil_reachable: true). "
+        "Home PC cookies usually do not work on VPS IPs — remove cookies.txt if problems persist."
     )
 
 
