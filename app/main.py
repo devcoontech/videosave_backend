@@ -20,8 +20,9 @@ from backend.app.services.ffmpeg_service import ffmpeg_service
 
 import time
 from typing import Dict, List
-from fastapi import Request, Response, HTTPException, status
+from fastapi import Request, Response, HTTPException, status, WebSocket
 from backend.app.services.download_service import download_manager
+from backend.app.api.routes.websocket import websocket_download_progress
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -72,11 +73,23 @@ def get_client_ip(request: Request) -> str:
         return real_ip.strip()
     return request.client.host if request.client else "unknown"
 
+def is_progress_poll(request: Request) -> bool:
+    """Status polling must not count toward the API rate limit."""
+    if request.method != "GET":
+        return False
+    parts = request.url.path.strip("/").split("/")
+    if parts[:2] == ["api", "download"] and len(parts) == 3:
+        return True
+    if parts[:3] == ["api", "playlist", "job"] and len(parts) == 4:
+        return True
+    return False
+
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     # Only rate-limit API action endpoints
     path = request.url.path
-    if path.startswith("/api/") and not path.startswith("/api/health"):
+    if path.startswith("/api/") and not path.startswith("/api/health") and not is_progress_poll(request):
         client_ip = get_client_ip(request)
         now = time.time()
         
@@ -142,6 +155,12 @@ app.add_middleware(
 
 # Include main API router
 app.include_router(api_router)
+
+
+@app.websocket("/ws/download/{job_id}")
+async def websocket_download_progress_root(websocket: WebSocket, job_id: str):
+    """Browser clients connect to ws://host:8000/ws/download/{job_id}."""
+    await websocket_download_progress(websocket, job_id)
 
 
 @app.get("/api/health", tags=["Health"])

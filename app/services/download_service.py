@@ -191,8 +191,13 @@ class DownloadManager:
                 job.progress = 99.0
                 asyncio.run_coroutine_threadsafe(self.broadcast_job_update(job), loop)
 
-        # Build strict format selector prioritizing exact requested quality
-        if not format_id or format_id == "best":
+        is_mp3 = (format_id or "").lower() in ("mp3", "audio", "bestaudio")
+
+        # Build format selector for video quality or MP3 audio extraction
+        if is_mp3:
+            fmt_str = "bestaudio/best"
+            fmt_sort = ["abr", "size"]
+        elif not format_id or format_id == "best":
             fmt_str = "bestvideo+bestaudio/best"
             fmt_sort = ["res", "fps", "codec:h264", "size"]
         else:
@@ -216,15 +221,12 @@ class DownloadManager:
 
         from backend.app.services.extractor import get_platform_headers
 
-        quality_slug = sanitize_filename(
-            format_id if format_id and format_id != "best" else "best"
-        )
+        quality_slug = sanitize_filename("MP3" if is_mp3 else (format_id if format_id and format_id != "best" else "best"))
 
         ydl_opts = {
             "format": fmt_str,
             "format_sort": fmt_sort,
             "outtmpl": os.path.join(output_dir, f"%(title)s - {quality_slug} [{job.id[:8]}].%(ext)s"),
-            "merge_output_format": "mp4",
             "progress_hooks": [progress_hook],
             "quiet": True,
             "no_warnings": True,
@@ -243,6 +245,17 @@ class DownloadManager:
                 },
             },
         }
+
+        if is_mp3:
+            ydl_opts["postprocessors"] = [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }
+            ]
+        else:
+            ydl_opts["merge_output_format"] = "mp4"
 
 
 
@@ -264,8 +277,10 @@ class DownloadManager:
                     filename = ydl.prepare_filename(info)
                     if not os.path.exists(filename):
                         base, _ = os.path.splitext(filename)
-                        if os.path.exists(base + ".mp4"):
-                            filename = base + ".mp4"
+                        for ext in (".mp3", ".mp4", ".m4a", ".webm"):
+                            if os.path.exists(base + ext):
+                                filename = base + ext
+                                break
                     return info, filename
 
             # Execute with configurable hard timeout per download job
@@ -285,17 +300,26 @@ class DownloadManager:
                         final_filepath = os.path.join(output_dir, f)
                         break
 
+            if is_mp3:
+                base, _ = os.path.splitext(final_filepath)
+                if os.path.exists(base + ".mp3"):
+                    final_filepath = base + ".mp3"
+
             job.status = JobStatus.COMPLETED
             job.progress = 100.0
             title_clean = sanitize_filename(info.get("title", "Downloaded Video"))
-            ext_clean = final_filepath.split(".")[-1] if "." in final_filepath else "mp4"
-            height = info.get("height")
-            if format_id and format_id != "best":
-                quality_label = format_id if str(format_id).lower().endswith("p") else f"{format_id}p"
-            elif height:
-                quality_label = f"{int(height)}p"
+            if is_mp3:
+                quality_label = "MP3"
+                ext_clean = "mp3"
             else:
-                quality_label = "best"
+                ext_clean = final_filepath.split(".")[-1] if "." in final_filepath else "mp4"
+                height = info.get("height")
+                if format_id and format_id != "best":
+                    quality_label = format_id if str(format_id).lower().endswith("p") else f"{format_id}p"
+                elif height:
+                    quality_label = f"{int(height)}p"
+                else:
+                    quality_label = "best"
             job.title = info.get("title", "Downloaded Video")
             job.filepath = final_filepath
             job.filename = f"{title_clean} - {quality_label}.{ext_clean}"
@@ -319,6 +343,18 @@ class DownloadManager:
                 job.status = JobStatus.FAILED
                 job.error = str(e)
             await self.broadcast_job_update(job)
+
+    def _cleanup_job_files(self, job_id: str, output_dir: str):
+        marker = job_id[:8]
+        try:
+            for name in os.listdir(output_dir):
+                if marker in name:
+                    try:
+                        os.remove(os.path.join(output_dir, name))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
 
 download_manager = DownloadManager()

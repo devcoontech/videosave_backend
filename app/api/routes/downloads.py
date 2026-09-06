@@ -73,10 +73,12 @@ async def download_job_file(job_id: str):
         )
 
     filename = job.filename or os.path.basename(job.filepath)
+    ext = os.path.splitext(filename)[1].lower()
+    media_type = "audio/mpeg" if ext == ".mp3" else "application/octet-stream"
     return FileResponse(
         path=job.filepath,
         filename=filename,
-        media_type="application/octet-stream",
+        media_type=media_type,
     )
 
 

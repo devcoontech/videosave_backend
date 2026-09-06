@@ -236,7 +236,22 @@ class MediaExtractor:
         sorted_heights = sorted(video_formats_by_height.keys(), reverse=True)
         distinct_formats: List[MediaFormat] = [video_formats_by_height[h] for h in sorted_heights]
 
-        # Always include Best Available Quality at top
+        audio_size = None
+        for fmt in formats_raw:
+            acodec = fmt.get("acodec")
+            vcodec = fmt.get("vcodec", "none")
+            if vcodec != "none" or not acodec or acodec == "none":
+                continue
+            raw_fs = fmt.get("filesize") or fmt.get("filesize_approx")
+            if raw_fs is None:
+                continue
+            size = int(float(raw_fs))
+            if audio_size is None or size > audio_size:
+                audio_size = size
+        if audio_size is None and duration:
+            audio_size = int(duration * 192000 / 8)
+
+        # Always include Best Available Quality at top and MP3 audio at the end
         result_formats = [
             MediaFormat(
                 format_id="best",
@@ -245,7 +260,16 @@ class MediaExtractor:
                 has_video=True,
                 has_audio=True,
             )
-        ] + distinct_formats
+        ] + distinct_formats + [
+            MediaFormat(
+                format_id="mp3",
+                quality="MP3 Audio",
+                ext="mp3",
+                has_video=False,
+                has_audio=True,
+                filesize=audio_size,
+            )
+        ]
 
         return MediaInfoResponse(
             success=True,
