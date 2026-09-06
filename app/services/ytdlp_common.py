@@ -471,6 +471,9 @@ def base_ydl_opts(
         "windowsfilenames": True,
         "restrictfilenames": True,
     }
+    proxy_val = (settings.HTTP_PROXY or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or "").strip()
+    if proxy_val:
+        opts["proxy"] = proxy_val
     if use_cookies:
         cookies = cookies_file()
         platform = detect_platform(url)

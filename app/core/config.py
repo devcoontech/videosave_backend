@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     BGUTIL_POT_BASE_URL: str = ""
     # Optional bgutil script home (server folder with build/generate_once.js)
     BGUTIL_SCRIPT_HOME: str = ""
+    # Optional proxy URL for yt-dlp (e.g. "socks5://127.0.0.1:4000" or "http://proxy:8080")
+    HTTP_PROXY: str = ""
     # On VPS, home-exported cookies often cause IP-mismatch blocks — keep False (anonymous clients first).
     YOUTUBE_COOKIES_FIRST: bool = False
 
