@@ -29,3 +29,5 @@
 #    GET /api/health/youtube-test → success: true
 #
 # Do NOT mount cookies.txt for YouTube on VPS.
+# Guest cookies (VISITOR_INFO, GPS, PREF — no SID/LOGIN_INFO) make YouTube fail on datacenter IPs.
+# cookies.txt is only useful for Facebook/Instagram private content, not YouTube on VPS.

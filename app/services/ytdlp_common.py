@@ -24,8 +24,13 @@ def has_logged_in_cookies() -> bool:
     return bool(diag["configured"] and (diag["has_login_info"] or diag["has_sid"]))
 
 
+def should_use_youtube_cookies() -> bool:
+    """Only use cookies for YouTube when a real logged-in session is present."""
+    return has_logged_in_cookies()
+
+
 def build_youtube_try_plans() -> List[Tuple[List[str], bool]]:
-    """Anonymous clients first on VPS — home cookies + datacenter IP triggers bot blocks."""
+    """Anonymous clients first on VPS — guest/home cookies on datacenter IP trigger bot blocks."""
     cookie_plans: List[Tuple[List[str], bool]] = [
         (["web"], True),
         (["web", "web_safari"], True),
@@ -42,17 +47,14 @@ def build_youtube_try_plans() -> List[Tuple[List[str], bool]]:
         (["web_safari"], False),
         (["android", "ios"], False),
     ]
-    has_cookies = bool(cookies_file())
     has_login = has_logged_in_cookies()
 
     if settings.YOUTUBE_COOKIES_FIRST and has_login:
         return cookie_plans + anonymous_plans
-    if settings.YOUTUBE_COOKIES_FIRST and has_cookies:
-        return cookie_plans + anonymous_plans
 
-    # Default: no-cookie clients first (works on most VPS IPs with bgutil or android_vr)
+    # Default: PO-token anonymous clients only; never fall back to guest cookies on VPS.
     plans = list(anonymous_plans)
-    if has_login or has_cookies:
+    if has_login:
         plans.extend(cookie_plans)
     return plans
 
@@ -380,8 +382,12 @@ def base_ydl_opts(
     }
     if use_cookies:
         cookies = cookies_file()
+        platform = detect_platform(url)
         if cookies:
-            opts["cookiefile"] = cookies
+            if platform == "youtube" and not should_use_youtube_cookies():
+                pass
+            else:
+                opts["cookiefile"] = cookies
     if detect_platform(url) == "youtube":
         opts["remote_components"] = {"ejs:github"}
         node_bin = node_binary()
@@ -484,15 +490,16 @@ def youtube_bot_user_message() -> str:
             "YouTube blocked this datacenter IP. "
             "Rebuild the backend so PO tokens are available (see cookies.txt.example)."
         )
-    if diag["youtube_entries"] == 0:
+    if not diag["has_login_info"] and not diag["has_sid"]:
+        if diag["youtube_entries"] > 0:
+            return (
+                "cookies.txt is mounted but has only guest YouTube cookies (no SID/LOGIN_INFO). "
+                "Remove the cookies.txt file mount in Coolify for YouTube on VPS — bgutil PO tokens are used instead. "
+                "Guest cookies from your PC on a datacenter IP make downloads fail."
+            )
         return (
             "cookies.txt was found but contains no .youtube.com entries. "
-            "Re-export from Firefox while on youtube.com and re-upload to /app/cookies.txt."
-        )
-    if not diag["has_login_info"] and not diag["has_sid"]:
-        return (
-            "cookies.txt is missing a logged-in YouTube session (no SID/LOGIN_INFO). "
-            "Log into YouTube in Firefox, export cookies for the current site, and re-upload."
+            "For YouTube on VPS, remove cookies.txt entirely and use bgutil PO tokens."
         )
     return (
         "YouTube blocked all download methods from this server. "
