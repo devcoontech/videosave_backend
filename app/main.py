@@ -24,6 +24,7 @@ from backend.app.services.ytdlp_common import (
     cookies_file,
     has_impersonate,
     pot_provider_ready,
+    test_youtube_extract,
 )
 
 
@@ -262,3 +263,11 @@ async def health_check():
         "pot_provider_ready": pot_provider_ready(),
         "youtube_ready": youtube_ready,
     }
+
+
+@app.get("/api/health/youtube-test", tags=["Health"])
+async def youtube_health_test():
+    """Run a live YouTube metadata probe (use to debug VPS bot blocks)."""
+    import asyncio
+
+    return await asyncio.to_thread(test_youtube_extract)

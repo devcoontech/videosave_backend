@@ -11,6 +11,12 @@ BGUTIL_SCRIPT="$BGUTIL_ROOT/build/generate_once.js"
 BGUTIL_LOG="/tmp/bgutil.log"
 
 if [ -f "$BGUTIL_SCRIPT" ]; then
+  if node -e "require('canvas');" >/dev/null 2>&1; then
+    echo "[start] node canvas module OK"
+  else
+    echo "[start] WARNING: node canvas module failed to load"
+    node -e "require('canvas');" 2>&1 | tail -n 5 || true
+  fi
   if node "$BGUTIL_SCRIPT" --version >/dev/null 2>&1; then
     echo "[start] bgutil script OK (version $(node "$BGUTIL_SCRIPT" --version 2>/dev/null))"
   else

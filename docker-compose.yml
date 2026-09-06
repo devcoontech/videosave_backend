@@ -1,0 +1,35 @@
+# Coolify: deploy as Docker Compose resource for reliable YouTube PO tokens.
+#
+# Backend env override:
+#   BGUTIL_POT_BASE_URL=http://bgutil:4416
+#
+services:
+  bgutil:
+    image: brainicism/bgutil-ytdlp-pot-provider:1.3.2-node
+    restart: unless-stopped
+    expose:
+      - "4416"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:4416/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  backend:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      bgutil:
+        condition: service_healthy
+    environment:
+      BGUTIL_POT_BASE_URL: http://bgutil:4416
+      YOUTUBE_COOKIES_FIRST: "false"
+      DOWNLOAD_DIR: downloads
+    ports:
+      - "8000:8000"
+    volumes:
+      - downloads:/app/downloads
+
+volumes:
+  downloads:

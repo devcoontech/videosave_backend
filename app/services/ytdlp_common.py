@@ -304,12 +304,13 @@ def extractor_args_for(url: str, player_clients: Optional[List[str]] = None) -> 
             "api_hostname": ["api22-normal-c-useast1a.tiktokv.com"],
         },
     }
-    if settings.BGUTIL_POT_BASE_URL and bgutil_is_reachable():
-        args["youtubepot-bgutilhttp"] = {"base_url": [settings.BGUTIL_POT_BASE_URL]}
-    elif bgutil_script_available():
+    if bgutil_script_available():
         home = bgutil_script_home()
         if home:
             args["youtubepot-bgutilscript"] = {"server_home": [home]}
+    bgutil_url = (settings.BGUTIL_POT_BASE_URL or "").strip()
+    if bgutil_url:
+        args["youtubepot-bgutilhttp"] = {"base_url": [bgutil_url.rstrip("/")]}
     return args
 
 def format_selector(url: str, format_id: str = "best") -> str:
@@ -381,9 +382,10 @@ def base_ydl_opts(
         cookies = cookies_file()
         if cookies:
             opts["cookiefile"] = cookies
-    if detect_platform(url) == "youtube" and bgutil_script_available() and not bgutil_is_reachable():
+    if detect_platform(url) == "youtube":
+        opts["remote_components"] = {"ejs:github"}
         node_bin = node_binary()
-        if node_bin:
+        if node_bin and bgutil_script_available():
             opts["js_runtimes"] = {"node": {"path": node_bin}}
     ffmpeg_loc = ffmpeg_service.get_ffmpeg_location()
     if ffmpeg_loc:
@@ -474,9 +476,9 @@ def youtube_bot_user_message() -> str:
     if not diag["configured"]:
         if pot_ready:
             return (
-                "YouTube blocked this request from the server IP even with PO tokens. "
-                "Wait a minute and retry, or add a dedicated bgutil sidecar for better reliability. "
-                "Check /api/health → youtube_ready should be true."
+                "YouTube blocked this server IP. Rebuild the backend, then open "
+                "/api/health/youtube-test to see the exact failure. "
+                "If bgutil_reachable is false, add a bgutil sidecar (see cookies.txt.example)."
             )
         return (
             "YouTube blocked this datacenter IP. "
@@ -702,3 +704,27 @@ def download_media_with_fallback(
     with yt_dlp.YoutubeDL(opts) as ydl:
         filepath = _resolve_downloaded_filepath(ydl, info, opts)
     return info, filepath, opts
+
+
+def test_youtube_extract(
+    test_url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+) -> Dict[str, Any]:
+    """Lightweight live probe used by /api/health/youtube-test."""
+    result: Dict[str, Any] = {
+        "url": test_url,
+        "success": False,
+        "title": None,
+        "error": None,
+        "pot_provider_ready": pot_provider_ready(),
+        "bgutil_reachable": bgutil_is_reachable(),
+        "bgutil_script_available": bgutil_script_available(),
+        "bgutil_script_runnable": bgutil_script_runnable(),
+    }
+    try:
+        info, _opts = extract_info_with_fallback(test_url, download=False)
+        result["success"] = True
+        result["title"] = info.get("title")
+        result["format_count"] = len(info.get("formats") or [])
+    except Exception as exc:
+        result["error"] = str(exc)[:500]
+    return result

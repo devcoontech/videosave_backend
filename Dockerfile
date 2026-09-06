@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfontconfig1 \
     libpixman-1-0 \
     libfreetype6 \
+    libglib2.0-0 \
+    libpng16-16 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # bgutil node_modules (canvas, etc.) must run on the same Node major as the bgutil image.
@@ -35,7 +38,10 @@ RUN mkdir -p /app/downloads /app/temp \
     && mkdir -p /app/backend && ln -s /app/app /app/backend/app \
     && chmod +x /app/start.sh \
     && test -f /opt/bgutil-app/build/main.js \
-    && test -f /opt/bgutil-app/build/generate_once.js
+    && test -f /opt/bgutil-app/build/generate_once.js \
+    && node /opt/bgutil-app/build/generate_once.js --version \
+    && node -e "require('/opt/bgutil-app/node_modules/canvas'); console.log('canvas ok')" \
+    && python -c "import pathlib; assert list(pathlib.Path('/usr/local/lib/python3.11/site-packages/yt_dlp_plugins/extractor').glob('getpot_bgutil*.py')), 'bgutil plugin missing'"
 
 ENV PYTHONPATH=/app
 ENV BGUTIL_POT_BASE_URL=http://127.0.0.1:4416
