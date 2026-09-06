@@ -12,6 +12,7 @@ from backend.app.services.ytdlp_common import (
     is_facebook_parse_error,
     platform_headers,
     PROGRESSIVE_PLATFORMS,
+    youtube_bot_user_message,
 )
 
 
@@ -57,7 +58,7 @@ class MediaExtractor:
                 raise ExtractorFailure(
                     status.HTTP_403_FORBIDDEN,
                     "BOT_VERIFICATION_REQUIRED",
-                    "YouTube blocked this request. Add cookies.txt on the server (see cookies.txt.example) or try again later.",
+                    youtube_bot_user_message(),
                 ) from first_error
             if is_facebook_parse_error(err_text):
                 raise ExtractorFailure(
@@ -110,8 +111,6 @@ class MediaExtractor:
 
     async def get_media_info(self, url: str) -> MediaInfoResponse:
         normalized_url = validate_and_normalize_url(url)
-        platform = detect_platform(normalized_url)
-
         platform = detect_platform(normalized_url)
 
         try:

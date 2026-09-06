@@ -16,6 +16,7 @@ from backend.app.core.logging import logger
 from backend.app.api.router import api_router
 from backend.app.services.cleanup_service import cleanup_worker
 from backend.app.services.ffmpeg_service import ffmpeg_service
+from backend.app.services.ytdlp_common import cookies_file, has_impersonate
 
 
 import time
@@ -36,6 +37,17 @@ async def lifespan(app: FastAPI):
             "FFmpeg is not available in system PATH or configured FFMPEG_PATH. "
             "Video+Audio merging or complex conversions may fail."
         )
+
+    cookies_path = cookies_file()
+    if cookies_path:
+        logger.info(f"YouTube/Facebook cookies loaded from: {cookies_path}")
+    else:
+        logger.warning(
+            "No cookies.txt found. YouTube downloads will likely fail on VPS/datacenter IPs. "
+            "Mount cookies.txt at /app/cookies.txt (see cookies.txt.example)."
+        )
+    if has_impersonate():
+        logger.info("curl-cffi browser impersonation is available (Facebook).")
 
     # Start background temporary file cleanup worker
     cleanup_worker.start()
@@ -166,8 +178,16 @@ async def websocket_download_progress_root(websocket: WebSocket, job_id: str):
 @app.get("/api/health", tags=["Health"])
 async def health_check():
     """Health check endpoint returning system status and FFmpeg availability."""
+    import yt_dlp
+
+    cookies_path = cookies_file()
     return {
         "status": "healthy",
         "app_name": settings.APP_NAME,
         "ffmpeg_available": ffmpeg_service.is_available(),
+        "yt_dlp_version": yt_dlp.version.__version__,
+        "cookies_configured": bool(cookies_path),
+        "cookies_path": cookies_path,
+        "impersonate_available": has_impersonate(),
+        "bgutil_pot_url": settings.BGUTIL_POT_BASE_URL or None,
     }

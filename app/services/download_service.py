@@ -17,6 +17,7 @@ from backend.app.services.ytdlp_common import (
     format_selector,
     is_bot_challenge,
     is_facebook_parse_error,
+    youtube_bot_user_message,
 )
 
 
@@ -284,7 +285,7 @@ class DownloadManager:
                 job.error = "Download request timed out (exceeded 10 minutes limit)."
             elif isinstance(e, yt_dlp.utils.DownloadError) and is_bot_challenge(str(e)):
                 job.status = JobStatus.FAILED
-                job.error = "YouTube blocked this download. Mount cookies.txt on the server (/app/cookies.txt) and redeploy."
+                job.error = youtube_bot_user_message()
             elif isinstance(e, yt_dlp.utils.DownloadError) and is_facebook_parse_error(str(e)):
                 job.status = JobStatus.FAILED
                 job.error = "Facebook blocked this download. Try a public reel, or add cookies.txt on the server."

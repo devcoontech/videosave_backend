@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     COOKIES_FILE: str = ""
     # Optional YouTube PO token, e.g. "android.gvs+TOKEN" (see yt-dlp PO Token Guide)
     YOUTUBE_PO_TOKEN: str = ""
+    # Optional bgutil PO token HTTP server, e.g. http://127.0.0.1:4416
+    BGUTIL_POT_BASE_URL: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

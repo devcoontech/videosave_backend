@@ -1,14 +1,28 @@
-# Optional: export browser cookies for YouTube/Facebook on VPS/datacenter IPs.
+# YouTube on VPS/datacenter IPs (Contabo, AWS, etc.) requires cookies.txt.
 #
-# Setup:
-# 1. Install Firefox and log in to YouTube + Facebook
-# 2. Use extension "Get cookies.txt LOCALLY" (export current site)
-# 3. Save as cookies.txt
-# 4. Local dev: place in backend/cookies.txt
-# 5. Production (Coolify/Docker): mount at /app/cookies.txt
-#    OR set env COOKIES_FILE=/app/cookies.txt
+# === STEP-BY-STEP (Firefox — required, Chrome cookies often fail) ===
 #
-# Netscape HTTP Cookie File format is required.
+# 1. Install Firefox and log in to https://www.youtube.com
+# 2. Install extension: "Get cookies.txt LOCALLY"
+#    https://addons.mozilla.org/firefox/addon/cookies-txt/
+# 3. On youtube.com, click the extension → Export → "Current site"
+# 4. Save the file as cookies.txt
+# 5. Verify the file contains lines with ".youtube.com" in them
 #
-# Optional YouTube PO token (advanced, if bot checks persist):
-#   YOUTUBE_PO_TOKEN=android.gvs+YOUR_TOKEN
+# === Coolify deployment ===
+#
+# 1. In your backend app → Persistent Storage → add a file mount:
+#      Container path: /app/cookies.txt
+#      Upload your cookies.txt file
+# 2. OR set env: COOKIES_FILE=/app/cookies.txt
+# 3. Rebuild & redeploy the backend (not just restart)
+#
+# === Optional: PO Token sidecar (if cookies alone fail) ===
+#
+# Deploy a second Coolify service:
+#   Image: brainicism/bgutil-ytdlp-pot-provider:latest
+#   Port: 4416 (internal only)
+# Then set backend env:
+#   BGUTIL_POT_BASE_URL=http://<bgutil-service-hostname>:4416
+#
+# Cookies expire — re-export every few weeks if downloads stop working.

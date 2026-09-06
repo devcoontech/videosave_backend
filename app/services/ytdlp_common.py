@@ -13,13 +13,22 @@ CHROME_UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-YOUTUBE_PLAYER_CLIENTS = ["android", "ios", "tv", "mweb"]
+YOUTUBE_PLAYER_CLIENTS = ["android_vr", "tv", "web_safari", "android", "mweb"]
+# Ordered by reliability on datacenter/VPS IPs (no PO token required first).
 YOUTUBE_CLIENT_CHAINS: List[List[str]] = [
-    ["android", "ios", "tv", "mweb"],
-    ["android", "ios"],
+    ["android_vr"],
+    ["tv", "web_safari"],
+    ["web_safari"],
     ["tv_embedded"],
-    ["mweb"],
     ["android"],
+    ["mweb"],
+    ["android", "ios"],
+]
+# Used when cookies.txt is present (logged-in web/tv sessions).
+YOUTUBE_COOKIE_CLIENT_CHAINS: List[List[str]] = [
+    ["web"],
+    ["tv"],
+    ["web", "web_safari"],
 ]
 
 PROGRESSIVE_PLATFORMS = frozenset({"facebook", "instagram", "tiktok"})
@@ -94,18 +103,20 @@ def platform_headers(url: str) -> dict:
 def extractor_args_for(url: str, player_clients: Optional[List[str]] = None) -> dict:
     youtube_args: Dict[str, Any] = {
         "player_client": list(player_clients or YOUTUBE_PLAYER_CLIENTS),
-        "player_skip": ["webpage", "configs"],
     }
     if settings.YOUTUBE_PO_TOKEN:
         youtube_args["po_token"] = [settings.YOUTUBE_PO_TOKEN]
 
-    return {
+    args: Dict[str, Any] = {
         "youtube": youtube_args,
         "tiktok": {
             "app_version": ["33.0.0"],
             "manifest_app_version": ["33000"],
         },
     }
+    if settings.BGUTIL_POT_BASE_URL:
+        args["youtubepot-bgutilhttp"] = {"base_url": [settings.BGUTIL_POT_BASE_URL]}
+    return args
 
 
 def format_selector(url: str, format_id: str = "best") -> str:
@@ -201,10 +212,21 @@ def is_bot_challenge(message: str) -> bool:
             "please sign in",
             "use --cookies-from-browser",
             "bot verification",
-            "http error 403",
-            "unable to extract",
-            "challenge",
+            "the page needs to be reloaded",
         )
+    )
+
+
+def youtube_bot_user_message() -> str:
+    has_cookies = bool(cookies_file())
+    if has_cookies:
+        return (
+            "YouTube blocked this request. Your cookies.txt may be expired or invalid. "
+            "Re-export cookies from Firefox while logged into YouTube, replace /app/cookies.txt, and redeploy."
+        )
+    return (
+        "YouTube blocked this server's IP. Export YouTube cookies from Firefox "
+        "(extension: Get cookies.txt LOCALLY), mount the file at /app/cookies.txt in Coolify, and redeploy the backend."
     )
 
 
@@ -235,23 +257,24 @@ def extract_info_with_fallback(
     last_error: Optional[Exception] = None
 
     if platform == "youtube":
-        chains = YOUTUBE_CLIENT_CHAINS
-        cookie_modes = (True, False) if cookies_file() else (True,)
-        for use_cookies in cookie_modes:
-            for clients in chains:
-                try:
-                    opts = base_ydl_opts(
-                        url,
-                        extra,
-                        player_clients=clients,
-                        use_cookies=use_cookies,
-                    )
-                    return _run_ydl(url, opts, download), opts
-                except yt_dlp.utils.DownloadError as err:
-                    last_error = err
-                    if is_bot_challenge(str(err)):
-                        continue
-                    raise
+        chains: List[List[str]] = []
+        if cookies_file():
+            chains.extend(YOUTUBE_COOKIE_CLIENT_CHAINS)
+        chains.extend(YOUTUBE_CLIENT_CHAINS)
+        for clients in chains:
+            try:
+                opts = base_ydl_opts(
+                    url,
+                    extra,
+                    player_clients=clients,
+                    use_cookies=bool(cookies_file()),
+                )
+                return _run_ydl(url, opts, download), opts
+            except yt_dlp.utils.DownloadError as err:
+                last_error = err
+                if is_bot_challenge(str(err)):
+                    continue
+                raise
         if last_error:
             raise last_error
 
