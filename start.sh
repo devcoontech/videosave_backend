@@ -19,7 +19,7 @@ fi
 if [ -n "$BGUTIL_MAIN" ] && [ -f "$BGUTIL_MAIN" ]; then
   BGUTIL_DIR=$(dirname "$BGUTIL_MAIN")
   echo "[start] Launching bgutil from $BGUTIL_MAIN"
-  (cd "$BGUTIL_DIR/.." && node "$BGUTIL_MAIN" --host 127.0.0.1) &
+  (cd "$BGUTIL_DIR/.." && node "$BGUTIL_MAIN" --port 4416) &
   i=0
   while [ "$i" -lt 20 ]; do
     if curl -sf "http://127.0.0.1:4416/ping" >/dev/null 2>&1; then
