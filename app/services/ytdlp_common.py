@@ -384,7 +384,7 @@ def base_ydl_opts(
     if detect_platform(url) == "youtube" and bgutil_script_available() and not bgutil_is_reachable():
         node_bin = node_binary()
         if node_bin:
-            opts["js_runtimes"] = {"node": node_bin}
+            opts["js_runtimes"] = {"node": {"path": node_bin}}
     ffmpeg_loc = ffmpeg_service.get_ffmpeg_location()
     if ffmpeg_loc:
         opts["ffmpeg_location"] = ffmpeg_loc
