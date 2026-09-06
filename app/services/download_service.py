@@ -13,10 +13,11 @@ from backend.app.models.jobs import DownloadJob, JobStatus
 from backend.app.utils.urls import detect_platform
 from backend.app.utils.filenames import sanitize_filename
 from backend.app.services.ytdlp_common import (
-    extract_info_with_fallback,
+    download_media_with_fallback,
     format_selector,
     is_bot_challenge,
     is_facebook_parse_error,
+    is_format_unavailable_error,
     youtube_bot_user_message,
 )
 
@@ -215,15 +216,12 @@ class DownloadManager:
                     ]
                 elif platform not in ("facebook", "instagram", "tiktok"):
                     extra["merge_output_format"] = "mp4"
-                info, used_opts = extract_info_with_fallback(job.url, download=True, extra_opts=extra)
-                filename = yt_dlp.YoutubeDL(used_opts).prepare_filename(info)
-                if not os.path.exists(filename):
-                    base, _ = os.path.splitext(filename)
-                    for ext in (".mp3", ".mp4", ".m4a", ".webm"):
-                        if os.path.exists(base + ext):
-                            filename = base + ext
-                            break
-                return info, filename
+                info, final_filepath, used_opts = download_media_with_fallback(
+                    job.url,
+                    extra_opts=extra,
+                    format_id=format_id,
+                )
+                return info, final_filepath
 
             info, final_filepath = await asyncio.wait_for(
                 asyncio.to_thread(_download_sync),
@@ -289,6 +287,12 @@ class DownloadManager:
             elif isinstance(e, yt_dlp.utils.DownloadError) and is_facebook_parse_error(str(e)):
                 job.status = JobStatus.FAILED
                 job.error = "Facebook blocked this download. Try a public reel, or add cookies.txt on the server."
+            elif isinstance(e, yt_dlp.utils.DownloadError) and is_format_unavailable_error(str(e)):
+                job.status = JobStatus.FAILED
+                job.error = (
+                    "The selected quality is not available for download. "
+                    "Try 'Best Available Quality' or a lower resolution."
+                )
             else:
                 logger.error(f"Download failed for job {job.id}: {e}")
                 job.status = JobStatus.FAILED

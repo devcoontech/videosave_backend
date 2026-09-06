@@ -1,5 +1,8 @@
 import os
+import re
 import time
+import threading
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -62,6 +65,7 @@ FACEBOOK_IMPERSONATE = (
 )
 
 _bgutil_cache: Dict[str, Any] = {"checked_at": 0.0, "reachable": False}
+_youtube_script_semaphore = threading.Semaphore(2)
 
 DEFAULT_BGUTIL_SCRIPT_HOME = "/opt/bgutil-app"
 
@@ -293,11 +297,13 @@ def format_selector(url: str, format_id: str = "best") -> str:
         height = int(clean)
 
     if not format_id or format_id == "best":
-        return "bestvideo+bestaudio/best[ext=mp4]/best"
+        return "best[ext=mp4]/bestvideo+bestaudio/best[ext=mp4]/best"
     if height:
         return (
-            f"bestvideo[height<={height}]+bestaudio/"
+            f"best[height<={height}][ext=mp4]/"
             f"best[height<={height}]/"
+            f"bestvideo[height<={height}]+bestaudio/"
+            f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
             f"bestvideo+bestaudio/best"
         )
     return f"{format_id}+bestaudio/{format_id}/bestvideo+bestaudio/best"
@@ -443,12 +449,69 @@ def is_facebook_parse_error(message: str) -> bool:
     return "cannot parse data" in text or "[facebook]" in text and "parse" in text
 
 
+def is_format_unavailable_error(message: str) -> bool:
+    text = (message or "").lower()
+    return any(
+        token in text
+        for token in (
+            "requested format is not available",
+            "no video formats found",
+            "format is not available",
+        )
+    )
+
+
+def _resolve_downloaded_filepath(ydl: yt_dlp.YoutubeDL, info: dict, opts: dict) -> str:
+    for item in info.get("requested_downloads") or []:
+        filepath = item.get("filepath")
+        if filepath and os.path.exists(filepath):
+            return filepath
+
+    filepath = ydl.prepare_filename(info)
+    if os.path.exists(filepath):
+        return filepath
+
+    base, _ = os.path.splitext(filepath)
+    for ext in (".mp3", ".mp4", ".m4a", ".webm", ".mkv", ".opus"):
+        candidate = base + ext
+        if os.path.exists(candidate):
+            return candidate
+
+    outtmpl = str(opts.get("outtmpl") or "")
+    output_dir = os.path.dirname(outtmpl) or "."
+    marker_match = re.search(r"\[([0-9a-fA-F]{8})\]", outtmpl)
+    marker = marker_match.group(1) if marker_match else ""
+    if marker and os.path.isdir(output_dir):
+        for name in os.listdir(output_dir):
+            if marker in name:
+                candidate = os.path.join(output_dir, name)
+                if os.path.isfile(candidate):
+                    return candidate
+
+    raise yt_dlp.utils.DownloadError("Download finished but output file was not found on disk.")
+
+
+def _run_ydl_with_path(url: str, opts: dict, download: bool) -> Tuple[dict, Optional[str]]:
+    platform = detect_platform(url)
+    use_script_lock = (
+        platform == "youtube"
+        and bgutil_script_available()
+        and not bgutil_is_reachable()
+    )
+    lock_ctx = _youtube_script_semaphore if use_script_lock else nullcontext()
+
+    with lock_ctx:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=download)
+            if not info:
+                raise yt_dlp.utils.DownloadError("No information returned by extractor.")
+            filepath = _resolve_downloaded_filepath(ydl, info, opts) if download else None
+            return info, filepath
+
+
 def _run_ydl(url: str, opts: dict, download: bool) -> dict:
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=download)
-        if not info:
-            raise yt_dlp.utils.DownloadError("No information returned by extractor.")
-        return info
+    info, _filepath = _run_ydl_with_path(url, opts, download)
+    return info
 
 
 def extract_info_with_fallback(
@@ -520,3 +583,56 @@ def extract_info_with_fallback(
 
     opts = base_ydl_opts(url, extra)
     return _run_ydl(url, opts, download), opts
+
+
+def download_media_with_fallback(
+    url: str,
+    extra_opts: Optional[Dict] = None,
+    *,
+    format_id: str = "best",
+) -> Tuple[dict, str, dict]:
+    """
+    Download media with platform-specific retry chains and relaxed format fallbacks.
+    Returns (info_dict, output_filepath, ydl_opts_used).
+    """
+    platform = detect_platform(url)
+    extra = dict(extra_opts or {})
+    last_error: Optional[Exception] = None
+
+    if platform == "youtube":
+        requested_format = extra.get("format") or format_selector(url, format_id)
+        format_attempts: List[str] = []
+        for candidate in (requested_format, "best[ext=mp4]/best", "best"):
+            if candidate and candidate not in format_attempts:
+                format_attempts.append(str(candidate))
+
+        plans = build_youtube_try_plans()
+        for clients, use_account_cookies in plans:
+            for fmt in format_attempts:
+                attempt_extra = {**extra, "format": fmt}
+                try:
+                    opts = base_ydl_opts(
+                        url,
+                        attempt_extra,
+                        player_clients=clients,
+                        use_cookies=use_account_cookies,
+                    )
+                    info, filepath = _run_ydl_with_path(url, opts, download=True)
+                    if not filepath:
+                        raise yt_dlp.utils.DownloadError(
+                            "Download finished but output file was not found on disk."
+                        )
+                    return info, filepath, opts
+                except yt_dlp.utils.DownloadError as err:
+                    last_error = err
+                    err_text = str(err)
+                    if is_retryable_youtube_error(err_text) or is_format_unavailable_error(err_text):
+                        continue
+                    raise
+        if last_error:
+            raise last_error
+
+    info, opts = extract_info_with_fallback(url, download=True, extra_opts=extra)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        filepath = _resolve_downloaded_filepath(ydl, info, opts)
+    return info, filepath, opts

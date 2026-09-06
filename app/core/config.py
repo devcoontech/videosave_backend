@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     TEMP_DIR: str = "temp"
 
     FILE_RETENTION_MINUTES: int = 30
-    MAX_CONCURRENT_DOWNLOADS: int = 2
-    MAX_QUEUED_JOBS: int = 25
+    MAX_CONCURRENT_DOWNLOADS: int = 4
+    MAX_QUEUED_JOBS: int = 50
     DOWNLOAD_TIMEOUT_SECONDS: int = 3600
     MAX_PLAYLIST_ITEMS: int = 100
     MAX_DOWNLOAD_SIZE_GB: float = 10.0
