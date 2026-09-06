@@ -19,9 +19,11 @@ from backend.app.services.ffmpeg_service import ffmpeg_service
 from backend.app.services.ytdlp_common import (
     bgutil_script_available,
     bgutil_script_home,
+    bgutil_script_runnable,
     cookies_diagnostics,
     cookies_file,
     has_impersonate,
+    pot_provider_ready,
 )
 
 
@@ -230,10 +232,11 @@ async def health_check():
 
     script_home = bgutil_script_home()
     script_available = bgutil_script_available()
+    script_runnable = bgutil_script_runnable() if script_available else False
 
     youtube_ready = (
         bgutil_reachable
-        or script_available
+        or script_runnable
         or bool(cookie_info["has_login_info"] or cookie_info["has_sid"])
         or not bgutil_url
     )
@@ -255,5 +258,7 @@ async def health_check():
         "bgutil_reachable": bgutil_reachable,
         "bgutil_script_home": script_home,
         "bgutil_script_available": script_available,
+        "bgutil_script_runnable": script_runnable,
+        "pot_provider_ready": pot_provider_ready(),
         "youtube_ready": youtube_ready,
     }

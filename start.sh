@@ -1,9 +1,23 @@
 #!/bin/sh
 
+export HOME="${HOME:-/tmp}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/bgutil-cache}"
+export NODE_PATH="/opt/bgutil-app/node_modules"
+mkdir -p "$XDG_CACHE_HOME"
+
 BGUTIL_ROOT="/opt/bgutil-app"
 BGUTIL_MAIN="$BGUTIL_ROOT/build/main.js"
 BGUTIL_SCRIPT="$BGUTIL_ROOT/build/generate_once.js"
 BGUTIL_LOG="/tmp/bgutil.log"
+
+if [ -f "$BGUTIL_SCRIPT" ]; then
+  if node "$BGUTIL_SCRIPT" --version >/dev/null 2>&1; then
+    echo "[start] bgutil script OK (version $(node "$BGUTIL_SCRIPT" --version 2>/dev/null))"
+  else
+    echo "[start] WARNING: bgutil script failed --version check"
+    node "$BGUTIL_SCRIPT" --version 2>&1 | tail -n 5 || true
+  fi
+fi
 
 if [ -f "$BGUTIL_MAIN" ]; then
   echo "[start] Launching bgutil PO token server from $BGUTIL_MAIN"

@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg62-turbo \
     libgif7 \
     librsvg2-2 \
+    libfontconfig1 \
+    libpixman-1-0 \
+    libfreetype6 \
     && rm -rf /var/lib/apt/lists/*
 
 # bgutil node_modules (canvas, etc.) must run on the same Node major as the bgutil image.
@@ -37,6 +40,8 @@ RUN mkdir -p /app/downloads /app/temp \
 ENV PYTHONPATH=/app
 ENV BGUTIL_POT_BASE_URL=http://127.0.0.1:4416
 ENV YOUTUBE_COOKIES_FIRST=false
+ENV HOME=/tmp
+ENV XDG_CACHE_HOME=/tmp/bgutil-cache
 EXPOSE 8000
 
 CMD ["/app/start.sh"]

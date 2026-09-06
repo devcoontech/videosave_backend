@@ -5,9 +5,8 @@
 # === Option A: Built into backend Docker (automatic) ===
 # Rebuild backend. Check logs for:
 #   [start] bgutil PO token server is ready
-# Health: bgutil_reachable: true (preferred)
-# If HTTP server fails, script fallback may still work:
-#   bgutil_script_available: true → youtube_ready: true
+# Health: bgutil_reachable: true (preferred) OR bgutil_script_runnable: true
+# If bgutil_script_available is true but bgutil_script_runnable is false, rebuild — Node/canvas issue.
 #
 # === Option B: Separate Coolify service (most reliable) ===
 #

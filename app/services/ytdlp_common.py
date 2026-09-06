@@ -10,6 +10,7 @@ import yt_dlp
 from yt_dlp.networking.impersonate import ImpersonateTarget
 
 from backend.app.core.config import BASE_DIR, settings
+from backend.app.core.logging import logger
 from backend.app.services.ffmpeg_service import ffmpeg_service
 from backend.app.utils.urls import detect_platform
 
@@ -32,13 +33,13 @@ def build_youtube_try_plans() -> List[Tuple[List[str], bool]]:
         (["web_creator"], True),
     ]
     anonymous_plans: List[Tuple[List[str], bool]] = [
+        (["mweb"], False),
         (["android_vr"], False),
+        (["android"], False),
+        (["ios"], False),
         (["tv_embedded"], False),
         (["tv", "web_safari"], False),
         (["web_safari"], False),
-        (["android"], False),
-        (["mweb"], False),
-        (["ios"], False),
         (["android", "ios"], False),
     ]
     has_cookies = bool(cookies_file())
@@ -84,6 +85,44 @@ def bgutil_script_available() -> bool:
     if not home:
         return False
     return (Path(home) / "build" / "generate_once.js").is_file()
+
+
+def pot_provider_ready() -> bool:
+    return bgutil_is_reachable() or bgutil_script_available()
+
+
+def node_binary() -> Optional[str]:
+    for candidate in ("/usr/local/bin/node", "/usr/bin/node"):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def bgutil_script_runnable() -> bool:
+    home = bgutil_script_home()
+    script = Path(home) / "build" / "generate_once.js" if home else None
+    node = node_binary()
+    if not script or not script.is_file() or not node:
+        return False
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            [node, str(script), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cwd=home,
+            env={
+                **os.environ,
+                "HOME": os.environ.get("HOME", "/tmp"),
+                "XDG_CACHE_HOME": os.environ.get("XDG_CACHE_HOME", "/tmp/bgutil-cache"),
+                "NODE_PATH": str(Path(home) / "node_modules"),
+            },
+        )
+        return result.returncode == 0 and bool((result.stdout or "").strip())
+    except OSError:
+        return False
 
 
 def bgutil_is_reachable() -> bool:
@@ -227,7 +266,11 @@ def cookies_diagnostics() -> Dict[str, Any]:
 
 
 def platform_headers(url: str) -> dict:
+    platform = detect_platform(url)
     url_lower = url.lower()
+    if platform == "youtube":
+        # Custom User-Agent breaks bgutil PO tokens — yt-dlp sets per-client UA internally.
+        return {"Accept-Language": "en-US,en;q=0.9"}
     if "tiktok.com" in url_lower:
         referer = "https://www.tiktok.com/"
     elif "instagram.com" in url_lower:
@@ -268,7 +311,6 @@ def extractor_args_for(url: str, player_clients: Optional[List[str]] = None) -> 
         if home:
             args["youtubepot-bgutilscript"] = {"server_home": [home]}
     return args
-
 
 def format_selector(url: str, format_id: str = "best") -> str:
     """Facebook/Instagram/TikTok use progressive files (often hd/sd, not split A/V)."""
@@ -339,6 +381,10 @@ def base_ydl_opts(
         cookies = cookies_file()
         if cookies:
             opts["cookiefile"] = cookies
+    if detect_platform(url) == "youtube" and bgutil_script_available() and not bgutil_is_reachable():
+        node_bin = node_binary()
+        if node_bin:
+            opts["js_runtimes"] = {"node": node_bin}
     ffmpeg_loc = ffmpeg_service.get_ffmpeg_location()
     if ffmpeg_loc:
         opts["ffmpeg_location"] = ffmpeg_loc
@@ -412,20 +458,29 @@ def is_age_or_login_error(message: str) -> bool:
 
 def youtube_bot_user_message() -> str:
     diag = cookies_diagnostics()
-    bgutil_url = (settings.BGUTIL_POT_BASE_URL or "").strip()
-    if bgutil_url and not bgutil_is_reachable() and not bgutil_script_available():
+    pot_ready = pot_provider_ready()
+    script_runnable = bgutil_script_runnable()
+
+    if not pot_ready:
         return (
-            "YouTube is blocked because the PO token server (bgutil) is not running. "
-            "In Coolify: Rebuild the backend and check logs for 'bgutil PO token server is ready', "
-            "OR add a second service with image brainicism/bgutil-ytdlp-pot-provider:1.3.2-node "
-            "and set BGUTIL_POT_BASE_URL=http://<bgutil-service>:4416. "
-            "Check /api/health → bgutil_reachable or bgutil_script_available must be true."
+            "YouTube is blocked because PO tokens are not configured. "
+            "Rebuild the backend Docker image (see cookies.txt.example) or add a bgutil sidecar service."
+        )
+    if pot_ready and not bgutil_is_reachable() and bgutil_script_available() and not script_runnable:
+        return (
+            "YouTube PO token script is installed but Node.js cannot run it. "
+            "Rebuild the backend and check deploy logs for bgutil errors."
         )
     if not diag["configured"]:
+        if pot_ready:
+            return (
+                "YouTube blocked this request from the server IP even with PO tokens. "
+                "Wait a minute and retry, or add a dedicated bgutil sidecar for better reliability. "
+                "Check /api/health → youtube_ready should be true."
+            )
         return (
-            "YouTube blocked this datacenter IP. Do NOT use home PC cookies on VPS — they make it worse. "
-            "You need bgutil PO tokens: rebuild backend or add bgutil sidecar (see cookies.txt.example). "
-            "Verify /api/health shows bgutil_reachable: true."
+            "YouTube blocked this datacenter IP. "
+            "Rebuild the backend so PO tokens are available (see cookies.txt.example)."
         )
     if diag["youtube_entries"] == 0:
         return (
@@ -439,8 +494,8 @@ def youtube_bot_user_message() -> str:
         )
     return (
         "YouTube blocked all download methods from this server. "
-        "Rebuild the backend so bgutil PO tokens start (check /api/health → bgutil_reachable: true). "
-        "Home PC cookies usually do not work on VPS IPs — remove cookies.txt if problems persist."
+        "If /api/health shows bgutil_script_available: true, rebuild the latest backend. "
+        "Do not use home PC cookies on VPS — remove cookies.txt if present."
     )
 
 
@@ -541,9 +596,20 @@ def extract_info_with_fallback(
             except yt_dlp.utils.DownloadError as err:
                 last_error = err
                 if is_retryable_youtube_error(str(err)):
+                    logger.debug(
+                        "YouTube client %s (cookies=%s) failed: %s",
+                        clients,
+                        use_account_cookies,
+                        err,
+                    )
                     continue
                 raise
         if last_error:
+            logger.warning(
+                "YouTube extraction failed after all client fallbacks (pot_ready=%s): %s",
+                pot_provider_ready(),
+                last_error,
+            )
             raise last_error
 
     if platform in PROGRESSIVE_PLATFORMS:
