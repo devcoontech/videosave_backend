@@ -67,6 +67,94 @@ FACEBOOK_IMPERSONATE = (
     "chrome-133:macos-15",
 )
 
+_youtube_client_cache: Dict[str, Tuple[float, List[str], bool]] = {}
+_YOUTUBE_CLIENT_CACHE_TTL = 600
+
+
+def _youtube_video_id(url: str) -> str:
+    match = re.search(r"(?:v=|youtu\.be/|/shorts/)([\w-]{11})", url or "")
+    return match.group(1) if match else (url or "")
+
+
+def remember_youtube_clients(url: str, opts: dict) -> None:
+    clients = (opts.get("extractor_args") or {}).get("youtube", {}).get("player_client")
+    if not clients:
+        return
+    _youtube_client_cache[_youtube_video_id(url)] = (
+        time.time(),
+        list(clients),
+        bool(opts.get("cookiefile")),
+    )
+
+
+def recalled_youtube_clients(url: str) -> Optional[Tuple[List[str], bool]]:
+    entry = _youtube_client_cache.get(_youtube_video_id(url))
+    if not entry:
+        return None
+    cached_at, clients, use_cookies = entry
+    if time.time() - cached_at > _YOUTUBE_CLIENT_CACHE_TTL:
+        _youtube_client_cache.pop(_youtube_video_id(url), None)
+        return None
+    return clients, use_cookies
+
+
+def clients_from_opts(opts: dict) -> Tuple[Optional[List[str]], bool]:
+    clients = (opts.get("extractor_args") or {}).get("youtube", {}).get("player_client")
+    return (list(clients) if clients else None, bool(opts.get("cookiefile")))
+
+
+def _download_probe_extra(extra: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        k: v
+        for k, v in extra.items()
+        if k
+        not in (
+            "format",
+            "progress_hooks",
+            "outtmpl",
+            "postprocessors",
+            "merge_output_format",
+            "overwrites",
+            "continuedl",
+        )
+    }
+
+
+def _try_youtube_download(
+    url: str,
+    extra: Dict[str, Any],
+    format_attempts: List[str],
+    clients: List[str],
+    use_account_cookies: bool,
+) -> Tuple[dict, str, dict]:
+    last_error: Optional[Exception] = None
+    for fmt in format_attempts:
+        attempt_extra = {**extra, "format": fmt}
+        try:
+            opts = base_ydl_opts(
+                url,
+                attempt_extra,
+                player_clients=clients,
+                use_cookies=use_account_cookies,
+            )
+            info, filepath = _run_ydl_with_path(url, opts, download=True)
+            if not filepath:
+                raise yt_dlp.utils.DownloadError(
+                    "Download finished but output file was not found on disk."
+                )
+            remember_youtube_clients(url, opts)
+            return info, filepath, opts
+        except yt_dlp.utils.DownloadError as err:
+            last_error = err
+            err_text = str(err)
+            if is_retryable_youtube_error(err_text) or is_format_unavailable_error(err_text):
+                time.sleep(1.5)
+                continue
+            raise
+    if last_error:
+        raise last_error
+    raise yt_dlp.utils.DownloadError("No download formats were attempted.")
+
 _bgutil_cache: Dict[str, Any] = {"checked_at": 0.0, "reachable": False}
 _youtube_script_semaphore = threading.Semaphore(2)
 
@@ -609,7 +697,9 @@ def extract_info_with_fallback(
                     player_clients=clients,
                     use_cookies=use_account_cookies,
                 )
-                return _run_ydl(url, opts, download), opts
+                info = _run_ydl(url, opts, download)
+                remember_youtube_clients(url, opts)
+                return info, opts
             except yt_dlp.utils.DownloadError as err:
                 last_error = err
                 if is_retryable_youtube_error(str(err)):
@@ -619,6 +709,7 @@ def extract_info_with_fallback(
                         use_account_cookies,
                         err,
                     )
+                    time.sleep(1.5)
                     continue
                 raise
         if last_error:
@@ -689,29 +780,63 @@ def download_media_with_fallback(
             if candidate and candidate not in format_attempts:
                 format_attempts.append(str(candidate))
 
-        plans = build_youtube_try_plans()
-        for clients, use_account_cookies in plans:
-            for fmt in format_attempts:
-                attempt_extra = {**extra, "format": fmt}
+        probe_extra = _download_probe_extra(extra)
+        last_error: Optional[Exception] = None
+
+        if recalled_youtube_clients(url):
+            time.sleep(2)
+
+        cached = recalled_youtube_clients(url)
+        if cached:
+            clients, use_cookies = cached
+            try:
+                return _try_youtube_download(
+                    url, extra, format_attempts, clients, use_cookies
+                )
+            except yt_dlp.utils.DownloadError as err:
+                last_error = err
+                logger.info(
+                    "YouTube download with cached client %s failed, reprobing: %s",
+                    clients,
+                    err,
+                )
+
+        try:
+            _probe_info, probe_opts = extract_info_with_fallback(
+                url,
+                download=False,
+                extra_opts=probe_extra,
+            )
+            clients, use_cookies = clients_from_opts(probe_opts)
+            if clients:
                 try:
-                    opts = base_ydl_opts(
-                        url,
-                        attempt_extra,
-                        player_clients=clients,
-                        use_cookies=use_account_cookies,
+                    return _try_youtube_download(
+                        url, extra, format_attempts, clients, use_cookies
                     )
-                    info, filepath = _run_ydl_with_path(url, opts, download=True)
-                    if not filepath:
-                        raise yt_dlp.utils.DownloadError(
-                            "Download finished but output file was not found on disk."
-                        )
-                    return info, filepath, opts
                 except yt_dlp.utils.DownloadError as err:
                     last_error = err
-                    err_text = str(err)
-                    if is_retryable_youtube_error(err_text) or is_format_unavailable_error(err_text):
-                        continue
-                    raise
+                    logger.info(
+                        "YouTube download with probed client %s failed, trying full chain: %s",
+                        clients,
+                        err,
+                    )
+        except yt_dlp.utils.DownloadError as err:
+            last_error = err
+            logger.info("YouTube metadata probe before download failed: %s", err)
+
+        plans = build_youtube_try_plans()
+        for clients, use_account_cookies in plans:
+            try:
+                return _try_youtube_download(
+                    url, extra, format_attempts, clients, use_account_cookies
+                )
+            except yt_dlp.utils.DownloadError as err:
+                last_error = err
+                err_text = str(err)
+                if is_retryable_youtube_error(err_text) or is_format_unavailable_error(err_text):
+                    time.sleep(1.5)
+                    continue
+                raise
         if last_error:
             raise last_error
 
