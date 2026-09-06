@@ -59,7 +59,7 @@ class MediaExtractor:
                 raise ExtractorFailure(
                     status.HTTP_403_FORBIDDEN,
                     "BOT_VERIFICATION_REQUIRED",
-                    youtube_bot_user_message(),
+                    youtube_bot_user_message() + f" Details: {err_text[:240]}",
                 ) from first_error
             if is_facebook_parse_error(err_text):
                 raise ExtractorFailure(

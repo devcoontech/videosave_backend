@@ -38,14 +38,14 @@ def build_youtube_try_plans() -> List[Tuple[List[str], bool]]:
         (["web_creator"], True),
     ]
     anonymous_plans: List[Tuple[List[str], bool]] = [
-        (["mweb"], False),
-        (["android_vr"], False),
+        (["web_embedded"], False),
         (["android"], False),
+        (["mweb"], False),
         (["ios"], False),
         (["tv_embedded"], False),
-        (["tv", "web_safari"], False),
         (["web_safari"], False),
-        (["android", "ios"], False),
+        (["tv", "web_safari"], False),
+        (["android_vr"], False),
     ]
     has_login = has_logged_in_cookies()
 
@@ -290,10 +290,13 @@ def platform_headers(url: str) -> dict:
 
 def extractor_args_for(url: str, player_clients: Optional[List[str]] = None) -> dict:
     youtube_args: Dict[str, Any] = {
-        "player_client": list(player_clients or ["web", "web_safari", "android_vr", "tv"]),
+        "player_client": list(player_clients or ["web", "web_safari", "android", "tv"]),
     }
     if settings.YOUTUBE_PO_TOKEN:
         youtube_args["po_token"] = [settings.YOUTUBE_PO_TOKEN]
+    if pot_provider_ready():
+        # Skip the watch-page fetch that triggers datacenter bot checks; PO tokens handle player API.
+        youtube_args["player_skip"] = ["webpage"]
 
     args: Dict[str, Any] = {
         "youtube": youtube_args,
@@ -480,11 +483,16 @@ def youtube_bot_user_message() -> str:
             "Rebuild the backend and check deploy logs for bgutil errors."
         )
     if not diag["configured"]:
+        if pot_ready and bgutil_is_reachable():
+            return (
+                "YouTube blocked this datacenter IP even though PO tokens are active. "
+                "Open /api/health/youtube-test for the exact yt-dlp error. "
+                "Try again in a few minutes — the VPS IP may be temporarily rate-limited."
+            )
         if pot_ready:
             return (
-                "YouTube blocked this server IP. Rebuild the backend, then open "
-                "/api/health/youtube-test to see the exact failure. "
-                "If bgutil_reachable is false, add a bgutil sidecar (see cookies.txt.example)."
+                "YouTube blocked this server IP. Open /api/health/youtube-test for the exact error. "
+                "Ensure deploy logs show: [start] bgutil PO token server is ready."
             )
         return (
             "YouTube blocked this datacenter IP. "
@@ -722,6 +730,7 @@ def test_youtube_extract(
         "success": False,
         "title": None,
         "error": None,
+        "format_count": 0,
         "pot_provider_ready": pot_provider_ready(),
         "bgutil_reachable": bgutil_is_reachable(),
         "bgutil_script_available": bgutil_script_available(),
@@ -733,5 +742,6 @@ def test_youtube_extract(
         result["title"] = info.get("title")
         result["format_count"] = len(info.get("formats") or [])
     except Exception as exc:
-        result["error"] = str(exc)[:500]
+        result["error"] = str(exc)[:800]
+        logger.warning("YouTube health probe failed: %s", exc)
     return result
