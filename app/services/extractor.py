@@ -6,7 +6,13 @@ from backend.app.core.logging import logger
 from backend.app.core.security import validate_and_normalize_url
 from backend.app.utils.urls import detect_platform
 from backend.app.models.media import MediaFormat, MediaInfoResponse
-from backend.app.services.ytdlp_common import base_ydl_opts, is_bot_challenge, platform_headers
+from backend.app.services.ytdlp_common import (
+    extract_info_with_fallback,
+    is_bot_challenge,
+    is_facebook_parse_error,
+    platform_headers,
+    PROGRESSIVE_PLATFORMS,
+)
 
 
 def get_platform_headers(url: str) -> dict:
@@ -41,40 +47,26 @@ class MediaExtractor:
             return "144p"
         return f"{height}p"
 
-    def _extract_once(self, url: str, player_clients: List[str] | None = None) -> Dict[str, Any]:
-        options = base_ydl_opts(
-            url,
-            {
-                "extract_flat": False,
-                "skip_download": True,
-            },
-        )
-        if player_clients:
-            youtube_args = dict(options.get("extractor_args", {}).get("youtube", {}))
-            youtube_args["player_client"] = player_clients
-            options.setdefault("extractor_args", {})["youtube"] = youtube_args
-        with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                raise Exception("No information returned by extractor.")
-            return info
-
     def _sync_extract_info(self, url: str) -> Dict[str, Any]:
         try:
-            return self._extract_once(url)
+            info, _opts = extract_info_with_fallback(url, download=False)
+            return info
         except yt_dlp.utils.DownloadError as first_error:
-            if is_bot_challenge(str(first_error)):
-                try:
-                    return self._extract_once(url, player_clients=["android", "ios"])
-                except Exception as retry_error:
-                    logger.error(f"YouTube bot retry failed for {url}: {retry_error}")
-                    raise ExtractorFailure(
-                        status.HTTP_403_FORBIDDEN,
-                        "BOT_VERIFICATION_REQUIRED",
-                        "YouTube blocked this request. Try again in a minute, or add a cookies.txt file on the server.",
-                    ) from retry_error
+            err_text = str(first_error)
+            if is_bot_challenge(err_text):
+                raise ExtractorFailure(
+                    status.HTTP_403_FORBIDDEN,
+                    "BOT_VERIFICATION_REQUIRED",
+                    "YouTube blocked this request. Add cookies.txt on the server (see cookies.txt.example) or try again later.",
+                ) from first_error
+            if is_facebook_parse_error(err_text):
+                raise ExtractorFailure(
+                    status.HTTP_403_FORBIDDEN,
+                    "FACEBOOK_LOGIN_REQUIRED",
+                    "Facebook blocked this reel. It may be private, or the server needs cookies.txt mounted at /app/cookies.txt.",
+                ) from first_error
 
-            err_msg = str(first_error).lower()
+            err_msg = err_text.lower()
             if "private video" in err_msg or "login" in err_msg:
                 raise ExtractorFailure(
                     status.HTTP_403_FORBIDDEN,
@@ -120,6 +112,8 @@ class MediaExtractor:
         normalized_url = validate_and_normalize_url(url)
         platform = detect_platform(normalized_url)
 
+        platform = detect_platform(normalized_url)
+
         try:
             info = await asyncio.to_thread(self._sync_extract_info, normalized_url)
         except ExtractorFailure as e:
@@ -150,11 +144,19 @@ class MediaExtractor:
         video_formats_by_height: Dict[int, MediaFormat] = {}
 
         for fmt in formats_raw:
-            vcodec = fmt.get("vcodec", "none")
+            vcodec = fmt.get("vcodec")
             height = fmt.get("height")
+            raw_format_id = fmt.get("format_id") or ""
 
-            # REQUIRE video codec (ignore audio-only language tracks)
-            if vcodec == "none" or not height or height <= 0:
+            if platform in PROGRESSIVE_PLATFORMS:
+                if raw_format_id in ("hd", "sd"):
+                    height = 720 if raw_format_id == "hd" else 480
+                elif vcodec in (None, "none"):
+                    continue
+            elif vcodec in (None, "none"):
+                continue
+
+            if not height or height <= 0:
                 continue
 
             quality_label = self._format_height_quality(height)
@@ -165,9 +167,10 @@ class MediaExtractor:
             raw_fs = fmt.get("filesize") or fmt.get("filesize_approx")
             filesize = int(float(raw_fs)) if raw_fs is not None else None
 
+            format_key = raw_format_id if raw_format_id in ("hd", "sd") else f"{height}p"
             candidate = MediaFormat(
-                format_id=f"{height}p",
-                quality=quality_label,
+                format_id=format_key,
+                quality=quality_label if raw_format_id not in ("hd", "sd") else raw_format_id.upper(),
                 height=height,
                 width=width,
                 fps=fps,

@@ -13,9 +13,10 @@ from backend.app.models.jobs import DownloadJob, JobStatus
 from backend.app.utils.urls import detect_platform
 from backend.app.utils.filenames import sanitize_filename
 from backend.app.services.ytdlp_common import (
-    base_ydl_opts,
+    extract_info_with_fallback,
     format_selector,
     is_bot_challenge,
+    is_facebook_parse_error,
 )
 
 
@@ -192,59 +193,39 @@ class DownloadManager:
         fmt_str = format_selector(job.url, format_id)
         quality_slug = sanitize_filename("MP3" if is_mp3 else (format_id if format_id and format_id != "best" else "best"))
 
-        ydl_opts = base_ydl_opts(
-            job.url,
-            {
-                "format": fmt_str,
-                "outtmpl": os.path.join(output_dir, f"%(title)s - {quality_slug} [{job.id[:8]}].%(ext)s"),
-                "progress_hooks": [progress_hook],
-                "overwrites": True,
-                "continuedl": False,
-            },
-        )
-
-        if is_mp3:
-            ydl_opts["postprocessors"] = [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ]
-        elif platform not in ("facebook", "instagram", "tiktok"):
-            ydl_opts["merge_output_format"] = "mp4"
-
         try:
-            def _execute_ydl(player_clients: Optional[list] = None):
+            def _download_sync():
                 if job.status == JobStatus.CANCELLED:
                     raise Exception("DOWNLOAD_CANCELLED")
-                opts = dict(ydl_opts)
-                if player_clients:
-                    youtube_args = dict(opts.get("extractor_args", {}).get("youtube", {}))
-                    youtube_args["player_client"] = player_clients
-                    opts.setdefault("extractor_args", {})["youtube"] = youtube_args
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(job.url, download=True)
-                    filename = ydl.prepare_filename(info)
-                    if not os.path.exists(filename):
-                        base, _ = os.path.splitext(filename)
-                        for ext in (".mp3", ".mp4", ".m4a", ".webm"):
-                            if os.path.exists(base + ext):
-                                filename = base + ext
-                                break
-                    return info, filename
-
-            def _download_with_retry():
-                try:
-                    return _execute_ydl()
-                except yt_dlp.utils.DownloadError as err:
-                    if is_bot_challenge(str(err)) and detect_platform(job.url) == "youtube":
-                        logger.warning(f"YouTube bot challenge on download, retrying with android client: {job.id}")
-                        return _execute_ydl(player_clients=["android", "ios"])
-                    raise
+                extra: Dict[str, object] = {
+                    "format": fmt_str,
+                    "outtmpl": os.path.join(output_dir, f"%(title)s - {quality_slug} [{job.id[:8]}].%(ext)s"),
+                    "progress_hooks": [progress_hook],
+                    "overwrites": True,
+                    "continuedl": False,
+                }
+                if is_mp3:
+                    extra["postprocessors"] = [
+                        {
+                            "key": "FFmpegExtractAudio",
+                            "preferredcodec": "mp3",
+                            "preferredquality": "192",
+                        }
+                    ]
+                elif platform not in ("facebook", "instagram", "tiktok"):
+                    extra["merge_output_format"] = "mp4"
+                info, used_opts = extract_info_with_fallback(job.url, download=True, extra_opts=extra)
+                filename = yt_dlp.YoutubeDL(used_opts).prepare_filename(info)
+                if not os.path.exists(filename):
+                    base, _ = os.path.splitext(filename)
+                    for ext in (".mp3", ".mp4", ".m4a", ".webm"):
+                        if os.path.exists(base + ext):
+                            filename = base + ext
+                            break
+                return info, filename
 
             info, final_filepath = await asyncio.wait_for(
-                asyncio.to_thread(_download_with_retry),
+                asyncio.to_thread(_download_sync),
                 timeout=settings.DOWNLOAD_TIMEOUT_SECONDS,
             )
 
@@ -274,7 +255,11 @@ class DownloadManager:
                 ext_clean = final_filepath.split(".")[-1] if "." in final_filepath else "mp4"
                 height = info.get("height")
                 if format_id and format_id != "best":
-                    quality_label = format_id if str(format_id).lower().endswith("p") else f"{format_id}p"
+                    fid = str(format_id).lower()
+                    if fid in ("hd", "sd", "mp3"):
+                        quality_label = fid.upper() if fid != "mp3" else "MP3"
+                    else:
+                        quality_label = format_id if str(format_id).lower().endswith("p") else f"{format_id}p"
                 elif height:
                     quality_label = f"{int(height)}p"
                 else:
@@ -299,7 +284,10 @@ class DownloadManager:
                 job.error = "Download request timed out (exceeded 10 minutes limit)."
             elif isinstance(e, yt_dlp.utils.DownloadError) and is_bot_challenge(str(e)):
                 job.status = JobStatus.FAILED
-                job.error = "YouTube blocked this download. Try again later or add cookies.txt on the server."
+                job.error = "YouTube blocked this download. Mount cookies.txt on the server (/app/cookies.txt) and redeploy."
+            elif isinstance(e, yt_dlp.utils.DownloadError) and is_facebook_parse_error(str(e)):
+                job.status = JobStatus.FAILED
+                job.error = "Facebook blocked this download. Try a public reel, or add cookies.txt on the server."
             else:
                 logger.error(f"Download failed for job {job.id}: {e}")
                 job.status = JobStatus.FAILED

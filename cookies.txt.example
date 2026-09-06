@@ -1,8 +1,14 @@
-# Optional: export browser cookies for YouTube/Facebook/Instagram on VPS servers.
-# 1. Install a browser extension like "Get cookies.txt LOCALLY"
-# 2. Log in to YouTube/Facebook in your browser
-# 3. Export cookies for those sites
-# 4. Save as cookies.txt in the backend folder (or mount at /app/cookies.txt in Docker)
-# 5. Redeploy the backend
+# Optional: export browser cookies for YouTube/Facebook on VPS/datacenter IPs.
+#
+# Setup:
+# 1. Install Firefox and log in to YouTube + Facebook
+# 2. Use extension "Get cookies.txt LOCALLY" (export current site)
+# 3. Save as cookies.txt
+# 4. Local dev: place in backend/cookies.txt
+# 5. Production (Coolify/Docker): mount at /app/cookies.txt
+#    OR set env COOKIES_FILE=/app/cookies.txt
 #
 # Netscape HTTP Cookie File format is required.
+#
+# Optional YouTube PO token (advanced, if bot checks persist):
+#   YOUTUBE_PO_TOKEN=android.gvs+YOUR_TOKEN

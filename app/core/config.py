@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     CORS_ORIGINS: str = ""
 
+    # Optional path to Netscape cookies.txt (YouTube/Facebook on VPS IPs)
+    COOKIES_FILE: str = ""
+    # Optional YouTube PO token, e.g. "android.gvs+TOKEN" (see yt-dlp PO Token Guide)
+    YOUTUBE_PO_TOKEN: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
