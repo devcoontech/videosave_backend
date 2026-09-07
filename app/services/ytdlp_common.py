@@ -461,6 +461,7 @@ def base_ydl_opts(
         "max_sleep_interval": 3,
         "windowsfilenames": True,
         "restrictfilenames": True,
+        "trim_file_name": 100,
     }
     proxy_val = (settings.HTTP_PROXY or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or "").strip()
     if proxy_val:

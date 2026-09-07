@@ -201,7 +201,7 @@ class DownloadManager:
                     raise Exception("DOWNLOAD_CANCELLED")
                 extra: Dict[str, object] = {
                     "format": fmt_str,
-                    "outtmpl": os.path.join(output_dir, f"%(title)s - {quality_slug} [{job.id[:8]}].%(ext)s"),
+                    "outtmpl": os.path.join(output_dir, f"%(title).80s - {quality_slug} [{job.id[:8]}].%(ext)s"),
                     "progress_hooks": [progress_hook],
                     "overwrites": True,
                     "continuedl": False,
