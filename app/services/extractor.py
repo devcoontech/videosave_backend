@@ -113,6 +113,11 @@ class MediaExtractor:
 
     async def get_media_info(self, url: str) -> MediaInfoResponse:
         normalized_url = validate_and_normalize_url(url)
+        
+        # If single watch URL contains list param, clean it for single video extraction
+        if "youtube.com/watch" in normalized_url and "&list=" in normalized_url:
+            normalized_url = normalized_url.split("&list=")[0]
+
         platform = detect_platform(normalized_url)
 
         try:

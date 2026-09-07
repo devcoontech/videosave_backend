@@ -41,20 +41,17 @@ def build_youtube_try_plans() -> List[Tuple[List[str], bool]]:
         (["web"], False),
         (["web", "mweb"], False),
         (["mweb"], False),
-        (["android"], False),
-        (["ios"], False),
         (["web_safari"], False),
+        (["web_creator"], False),
         (["web_embedded"], False),
-        (["tv"], False),
-        (["tv_embedded"], False),
-        (["android_vr"], False),
     ]
     has_login = has_logged_in_cookies()
 
     if has_login:
-        return cookie_plans + anonymous_plans
+        return cookie_plans + anonymous_plans + [(["android"], False), (["tv"], False)]
 
     return anonymous_plans
+
 
 
 PROGRESSIVE_PLATFORMS = frozenset({"facebook", "instagram", "tiktok"})
@@ -376,7 +373,7 @@ def platform_headers(url: str) -> dict:
 
 def extractor_args_for(url: str, player_clients: Optional[List[str]] = None) -> dict:
     youtube_args: Dict[str, Any] = {
-        "player_client": list(player_clients or ["web", "web_safari", "android", "tv"]),
+        "player_client": list(player_clients or ["web", "mweb", "web_safari"]),
     }
     if settings.YOUTUBE_PO_TOKEN:
         youtube_args["po_token"] = [settings.YOUTUBE_PO_TOKEN]
