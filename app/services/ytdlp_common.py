@@ -425,13 +425,12 @@ def format_selector(url: str, format_id: str = "best") -> str:
         height = int(clean)
 
     if not format_id or format_id == "best":
-        return "best[ext=mp4]/bestvideo+bestaudio/best[ext=mp4]/best"
+        return "bestvideo+bestaudio/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
     if height:
         return (
-            f"best[height<={height}][ext=mp4]/"
-            f"best[height<={height}]/"
             f"bestvideo[height<={height}]+bestaudio/"
             f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
+            f"best[height<={height}]/"
             f"bestvideo+bestaudio/best"
         )
     return f"{format_id}+bestaudio/{format_id}/bestvideo+bestaudio/best"
